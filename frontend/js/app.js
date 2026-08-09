@@ -1068,6 +1068,18 @@ async function saveSettings() {
 }
 
 /* legacy stubs kept so old onclick names don't break */
+let _posAutoRefreshTimer = null, _posAutoRefreshing = false;
+function startPosAutoRefresh() {
+  // Background catalog/stock refresh every 60s on top of the manual sync
+  // button, guarded against overlap so it can't stack up requests.
+  if (_posAutoRefreshTimer) return;
+  _posAutoRefreshTimer = setInterval(async () => {
+    if (!CFG.token || _posAutoRefreshing) return;
+    _posAutoRefreshing = true;
+    try { await reloadCatalog(); } catch (e) {}
+    finally { _posAutoRefreshing = false; }
+  }, 60000);
+}
 function syncNow() {
   reloadCatalog();
 }
@@ -1104,6 +1116,7 @@ async function initApp() {
   renderRetList();
   renderDash();
   show('dashboard');
+  startPosAutoRefresh();
 }
 function updateClock() {
   const el = document.getElementById('clock');

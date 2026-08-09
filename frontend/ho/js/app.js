@@ -16,6 +16,19 @@ const today=()=>new Date().toISOString().split('T')[0];
 const fmt=n=>'LYD '+(+n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 function toast(msg,type='ok'){const t=$('toast');if(!t)return;t.textContent=msg;t.style.background=type==='error'?'var(--red)':type==='warn'?'#856404':type==='info'?'var(--accent2)':'var(--navy)';t.style.display='block';setTimeout(()=>t.style.display='none',3000);}
 function setSyncStatus(state,label){[$('sync-dot'),$('top-dot')].forEach(d=>{if(d)d.className='dot '+state;});const l=$('sync-lbl');if(l)l.textContent=state==='online'?'🟢 Connected':state==='syncing'?'🔄 Loading':'🔴 Offline';const tl=$('top-lbl');if(tl)tl.textContent=state==='online'?'Online':state==='syncing'?'Loading':'Offline';const sl=$('sync-last');if(sl&&label)sl.textContent=label;isOnline=state==='online';}
+let _hoAutoRefreshTimer=null,_hoAutoRefreshing=false;
+function startHoAutoRefresh(){
+  // Background refresh every 90s on top of the manual 🔄 Refresh button.
+  // Guarded so a slow refresh never overlaps the next tick (which is what
+  // caused the DB connection pool to fill up before).
+  if(_hoAutoRefreshTimer)return;
+  _hoAutoRefreshTimer=setInterval(async()=>{
+    if(!CFG.token||_hoAutoRefreshing)return;
+    _hoAutoRefreshing=true;
+    try{await loadAll();}catch(_e){}
+    finally{_hoAutoRefreshing=false;}
+  },90000);
+}
 function authHeaders(json=true){const h={};if(json)h['Content-Type']='application/json';if(CFG.token)h.Authorization='Bearer '+CFG.token;return h;}
 async function api(path,opts={}){const url=(CFG.apiUrl||DEFAULT_API).replace(/\/$/,'')+path;try{const res=await fetch(url,{method:opts.method||'GET',headers:authHeaders(!!opts.body),body:opts.body?JSON.stringify(opts.body):undefined});const data=await res.json().catch(()=>null);if(!res.ok)return{ok:false,status:'error',msg:(data&&(data.detail||data.msg))||res.statusText};return data;}catch(e){return{ok:false,status:'error',msg:e.message};}}
 function pinPress(d){if(pinEntry.length>=4)return;pinEntry+=d;$('pin-display').textContent='●'.repeat(pinEntry.length)+'—'.repeat(4-pinEntry.length);}
@@ -47,6 +60,7 @@ async function pinSubmit(){
     try{setSyncStatus('online','Logged in as '+(user.name||role));}catch(_err){}
     try{await loadAll();}catch(_err){console.error(_err); toast('Loaded with some errors','warn');}
     try{show('dashboard');}catch(_err){}
+    startHoAutoRefresh();
     return;
   }
   const msg=(res&&(res.detail||res.msg||res.message))||'Wrong PIN or server error';
@@ -66,10 +80,21 @@ if(name==='balance-sheet'){if($('bs-date'))$('bs-date').value=today();loadBalanc
 if(name==='cashflow'){cfPreset();loadCashFlow();}if(name==='supplier-accounts'){renderSupplierAccounts();if($('sup-txn-date'))$('sup-txn-date').value=today();}
 if(name==='capital'){if($('cap-date'))$('cap-date').value=today();renderCapital();}
 }
+async function fetchInBatches(fns,batchSize){
+  // Runs the given zero-arg async functions in small concurrent batches
+  // instead of all at once, so we never ask the DB for more connections
+  // than it can comfortably hand out in parallel.
+  const out=[];
+  for(let i=0;i<fns.length;i+=batchSize){
+    const batch=fns.slice(i,i+batchSize).map(fn=>fn());
+    out.push(...await Promise.all(batch));
+  }
+  return out;
+}
 async function loadAll(){if(!CFG.token){toast('Login first','warn');return;}setSyncStatus('syncing','Loading...');toast('🔄 Loading live data...','info');
-try{const [dash,sales,prods,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,suptx,caps,bs,cf]=await Promise.all([
-api('/api/dashboard'),api('/api/sales?limit=500'),api('/api/products?active_only=false'),api('/api/banks'),api('/api/stores/all'),api('/api/auth/users'),api('/api/expenses?limit=300'),
-api('/api/ho/warehouse'),api('/api/ho/supplier-grns'),api('/api/ho/store-grns'),api('/api/ho/transfers'),api('/api/ho/suppliers'),api('/api/ho/supplier-txns'),api('/api/ho/capital'),api('/api/ho/bs-entries'),api('/api/ho/cf-items')]);
+try{const [dash,sales,prods,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,suptx,caps,bs,cf]=await fetchInBatches([
+()=>api('/api/dashboard'),()=>api('/api/sales?limit=500'),()=>api('/api/products?active_only=false'),()=>api('/api/banks'),()=>api('/api/stores/all'),()=>api('/api/auth/users'),()=>api('/api/expenses?limit=300'),
+()=>api('/api/ho/warehouse'),()=>api('/api/ho/supplier-grns'),()=>api('/api/ho/store-grns'),()=>api('/api/ho/transfers'),()=>api('/api/ho/suppliers'),()=>api('/api/ho/supplier-txns'),()=>api('/api/ho/capital'),()=>api('/api/ho/bs-entries'),()=>api('/api/ho/cf-items')],4);
 if(dash&&dash.ok)DATA.dashboard=dash;
 if(sales&&sales.data)DATA.sales=sales.data.map(s=>({...s,Date:s.date,Total:s.total,Payment:s.payment,Store:s.store,StoreID:s.storeId}));
 if(Array.isArray(prods))DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
@@ -477,6 +502,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&$('login-screen')&&$
       const app=$('app'); if(app){app.style.display='flex';app.classList.add('open');}
       try{await loadAll();}catch(_e){}
       try{show('dashboard');}catch(_e){}
+      startHoAutoRefresh();
       return;
     }
     // stale token
