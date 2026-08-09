@@ -3,12 +3,14 @@ const DEFAULT_API=(location.origin&&location.origin.startsWith('http'))?location
 let CFG={apiUrl:localStorage.getItem('anta_ho_api')||DEFAULT_API,token:localStorage.getItem('anta_ho_token')||''};
 let DATA={stores:[],users:[],banks:[],products:[],warehouse:[],supplierGRNs:[],storeGRNs:[],transfers:[],expenses:[],dashboard:null,sales:[],inventory:[],categories:['Running','Casual','Basketball','Training','Kids','Slippers','Other'],settings:{company:'ANTA Shoes Libya',currency:'LYD'}}
 
-// Pagination and search for products
+// Pagination and search for products — server-side: only the current
+// page (prodPageSize rows) is ever fetched, never the full catalog.
 let prodPageSize=20;
 let prodCurrentPage=1;
 let prodSearchQuery='';
-let prodFilteredList=[];
-;
+let prodPageItems=[];   // rows for the currently-shown page only
+let prodTotalCount=0;   // total matching rows, from the server
+let prodFilteredList=[]; // kept for backward-compat with any leftover references; mirrors prodPageItems
 let sgrnLines=[],stgrnLines=[],trLines=[],suppliers=[],supplierTxns=[],capitalEntries=[],bsEntries=[],cfItems={investing:[],financing:[]};
 let isOnline=false,pinEntry='',currentUser=null;
 const $=id=>document.getElementById(id);
@@ -84,7 +86,7 @@ function show(name){document.querySelectorAll('.screen').forEach(s=>s.classList.
 if(name==='dashboard')renderDash();if(name==='stores-view')renderStoresView();if(name==='warehouse')renderWarehouse();
 if(name==='supplier-grn'){renderSGRNHist();if($('sgrn-date'))$('sgrn-date').value=today();if($('sgrn-id'))$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);}
 if(name==='store-grn'){renderStGRNTables();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
-if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products')loadProductsIfNeeded();
+if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products'){prodCurrentPage=1;fetchAndRenderProductsPage();}
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
 if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho')renderInvAll();
 if(name==='stores-admin')renderStoresAdmin();if(name==='users'){renderUsers();populateStoreSelects('u-store');}if(name==='banks')renderBanks();
@@ -105,28 +107,6 @@ async function fetchInBatches(fns,batchSize){
   return out;
 }
 function currentScreenName(){const el=document.querySelector('.screen.active');return el?el.id.replace('screen-',''):'';}
-let _productsLoaded=false,_productsLoading=false;
-async function loadProductsIfNeeded(force){
-  // The full product catalog (6,000+ rows on a big account) used to be
-  // fetched on every login and every 90s auto-refresh as part of the main
-  // dashboard batch — that's a lot of data to pull and serialize just to
-  // show a dashboard that doesn't even display the raw product list. Now
-  // it's fetched once, only when the Product Master screen is actually
-  // opened, and cached until you explicitly refresh.
-  if(_productsLoading)return;
-  if(_productsLoaded&&!force){renderProducts();return;}
-  _productsLoading=true;
-  if($('prod-table'))$('prod-table').innerHTML='<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">⏳ Loading products…</td></tr>';
-  try{
-    const prods=await api('/api/products?active_only=false');
-    if(Array.isArray(prods)){
-      DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
-      _productsLoaded=true;
-    }
-  }catch(_e){toast('❌ Failed to load products','error');}
-  finally{_productsLoading=false;}
-  renderProducts();
-}
 async function loadAll(){if(!CFG.token){toast('Login first','warn');return;}setSyncStatus('syncing','Loading...');toast('🔄 Loading live data...','info');
 try{const [dash,sales,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,suptx,caps,bs,cf]=await fetchInBatches([
 ()=>api('/api/dashboard'),()=>api('/api/sales?limit=500'),()=>api('/api/banks'),()=>api('/api/stores/all'),()=>api('/api/auth/users'),()=>api('/api/expenses?limit=300'),
@@ -143,7 +123,7 @@ if(bs&&bs.data)bsEntries=bs.data.map(b=>({id:b.id,type:b.type,desc:b.desc,amount
 if(cf&&cf.data){cfItems={investing:[],financing:[]};cf.data.forEach(c=>{if(!cfItems[c.section])cfItems[c.section]=[];cfItems[c.section].push({label:c.label,value:c.value});});}
 setSyncStatus('online','Loaded: '+new Date().toLocaleTimeString());if($('dash-status'))$('dash-status').textContent='Live data loaded: '+new Date().toLocaleTimeString();
 renderDash();populateStoreSelects();try{await loadCategories();}catch(_e){}
-if(currentScreenName()==='products'){try{await loadProductsIfNeeded(true);}catch(_e){}}
+if(currentScreenName()==='products'){try{await fetchAndRenderProductsPage();}catch(_e){}}
 toast('✅ All data loaded!');}catch(e){setSyncStatus('offline','Error');toast('❌ '+e.message,'error');}}
 async function loadCategories(){
   const res=await api('/api/categories');
@@ -181,7 +161,18 @@ function renderStoresView(){const sb=DATA.dashboard?.storeBreakdown||[];const st
 function renderWarehouse(){const search=(($('wh-search')||{}).value||'').toLowerCase();const data=DATA.warehouse.filter(w=>!search||(w.Name||'').toLowerCase().includes(search)||String(w.Barcode).includes(search));if($('wh-table'))$('wh-table').innerHTML=data.map(w=>{const oh=+w.OnHand||0;return`<tr><td style="font-family:monospace;font-size:10px">${w.Barcode}</td><td class="fw7">${w.Name}</td><td>${w.Brand||'—'}</td><td class="text-green">${w.Supplier_In||0}</td><td class="text-red">${w.Store_Out||0}</td><td style="font-weight:800;color:${oh<=0?'var(--red)':oh<=5?'var(--amber)':'var(--navy)'}">${oh}</td><td><button class="btn btn-primary btn-sm" onclick="show('store-grn')">Send</button></td></tr>`;}).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:18px">No warehouse data</td></tr>';}
 function addSGRNLine(){sgrnLines.push({barcode:'',name:'',qty:1,cost:0});renderSGRNLines();}
 function renderSGRNLines(){if(!$('sgrn-lines'))return;$('sgrn-lines').innerHTML=sgrnLines.map((l,i)=>`<tr><td><input class="form-input" style="width:130px;padding:4px 7px;font-size:11px" value="${l.barcode}" oninput="sgrnBC(${i},this.value)"></td><td><input class="form-input" style="padding:4px 7px;font-size:11px" value="${l.name}" oninput="sgrnLines[${i}].name=this.value"></td><td><input class="form-input" type="number" style="width:70px;padding:4px 7px" value="${l.qty}" oninput="sgrnLines[${i}].qty=+this.value;calcSGRN()"></td><td><input class="form-input" type="number" style="width:90px;padding:4px 7px" value="${l.cost}" oninput="sgrnLines[${i}].cost=+this.value;calcSGRN()"></td><td><button class="btn btn-ghost btn-sm" onclick="sgrnLines.splice(${i},1);renderSGRNLines()">✕</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--gray3);padding:13px">Add lines</td></tr>';calcSGRN();}
-function sgrnBC(i,bc){sgrnLines[i].barcode=bc;const p=DATA.products.find(p=>String(p.Barcode)===bc);if(p){sgrnLines[i].name=p.Name;sgrnLines[i].cost=+p.Cost||0;renderSGRNLines();}}
+let _sgrnBCDebounce=null;
+function sgrnBC(i,bc){
+  sgrnLines[i].barcode=bc;
+  clearTimeout(_sgrnBCDebounce);
+  if(bc.length<4)return;
+  _sgrnBCDebounce=setTimeout(async()=>{
+    const res=await api('/api/products/lookup/'+encodeURIComponent(bc));
+    if(res&&res.ok&&sgrnLines[i]&&sgrnLines[i].barcode===bc){
+      sgrnLines[i].name=res.name;sgrnLines[i].cost=+res.cost||0;renderSGRNLines();
+    }
+  },250);
+}
 function calcSGRN(){const tot=sgrnLines.reduce((s,l)=>s+l.qty*l.cost,0);if($('sgrn-n'))$('sgrn-n').textContent=sgrnLines.length;if($('sgrn-total'))$('sgrn-total').textContent=fmt(tot);}
 function clearSGRN(){sgrnLines=[];renderSGRNLines();}
 async function saveSGRN(){
@@ -280,7 +271,18 @@ function downloadStGRNTemplate(){const a=document.createElement('a');a.href=URL.
 async function uploadStGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>{const bc=String(r.Barcode||'').trim();const wh=DATA.warehouse.find(w=>String(w.Barcode)===bc);stgrnLines.push({barcode:bc,name:String(r.Name||wh?.Name||'').trim(),qty:+(r.Qty||1),hoStock:+(wh?.OnHand||0)});});renderStGRNLines();toast('✅ '+rows.length+' lines');}
 function addTrLine(){trLines.push({barcode:'',name:'',qty:1,notes:''});renderTrLines();}
 function renderTrLines(){if(!$('tr-lines'))return;$('tr-lines').innerHTML=trLines.map((l,i)=>`<tr><td><input class="form-input" style="width:120px;padding:4px 7px;font-size:11px" value="${l.barcode}" oninput="trBC(${i},this.value)"></td><td><input class="form-input" style="padding:4px 7px;font-size:11px" value="${l.name}"></td><td><input class="form-input" type="number" style="width:65px;padding:4px 7px" value="${l.qty}" oninput="trLines[${i}].qty=+this.value"></td><td><input class="form-input" style="padding:4px 7px;font-size:11px" value="${l.notes}" oninput="trLines[${i}].notes=this.value"></td><td><button class="btn btn-ghost btn-sm" onclick="trLines.splice(${i},1);renderTrLines()">✕</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--gray3);padding:13px">Add lines</td></tr>';}
-function trBC(i,bc){trLines[i].barcode=bc;const p=DATA.products.find(p=>String(p.Barcode)===bc);if(p){trLines[i].name=p.Name;renderTrLines();}}
+let _trBCDebounce=null;
+function trBC(i,bc){
+  trLines[i].barcode=bc;
+  clearTimeout(_trBCDebounce);
+  if(bc.length<4)return;
+  _trBCDebounce=setTimeout(async()=>{
+    const res=await api('/api/products/lookup/'+encodeURIComponent(bc));
+    if(res&&res.ok&&trLines[i]&&trLines[i].barcode===bc){
+      trLines[i].name=res.name;renderTrLines();
+    }
+  },250);
+}
 async function doTransfer(){const from=$('tr-from').value,to=$('tr-to').value;if(from===to||!trLines.length){toast('Invalid transfer','error');return;}const stores=DATA.stores;const res=await api('/api/ho/transfer',{method:'POST',body:{date:today(),fromStoreId:from,fromStore:(stores.find(s=>s.StoreID===from)||{}).Name||from,toStoreId:to,toStore:(stores.find(s=>s.StoreID===to)||{}).Name||to,lines:trLines}});if(res&&res.ok){toast('✅ Transfer '+res.count);trLines=[];renderTrLines();await loadAll();}else toast('❌ Failed','error');}
 function renderTrHist(){if($('tr-hist'))$('tr-hist').innerHTML=DATA.transfers.slice(0,20).map(t=>`<tr><td class="fw7">${t.RefID}</td><td>${t.Date}</td><td>${t.FromStore}</td><td>${t.ToStore}</td><td>${(t.Name||'').slice(0,25)}</td><td>${t.Qty}</td><td><span class="badge badge-green">${t.Status}</span></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:13px">No transfers</td></tr>';}
 let selectedProducts = new Set();
@@ -288,31 +290,34 @@ function toggleAllProducts(cb){
   // Selects/deselects every product matching the current search (all pages),
   // not just the page in view, so "select all" + the delete/count reflect
   // the full matching set the user is looking at.
-  const list=(prodFilteredList&&prodFilteredList.length)?prodFilteredList:(DATA.products||[]);
-  selectedProducts = cb.checked ? new Set(list.map(p=>p.Barcode)) : new Set();
-  renderProducts();
+  // Selects/deselects only the products on the CURRENT page. Since the
+  // full catalog is no longer loaded client-side (that was the slow
+  // part), "select all" now means "select all on this page" — for a
+  // bigger bulk delete, narrow the search first, or select page by page.
+  selectedProducts = cb.checked ? new Set([...selectedProducts,...prodPageItems.map(p=>p.Barcode)]) : new Set([...selectedProducts].filter(bc=>!prodPageItems.some(p=>p.Barcode===bc)));
+  renderProductsTable();
 }
 function toggleProduct(bc){
   if(selectedProducts.has(bc)) selectedProducts.delete(bc); else selectedProducts.add(bc);
-  renderProducts();
+  renderProductsTable();
 }
 async function deleteSelectedProducts(){
   if(!selectedProducts.size){toast('No products selected','error');return;}
   if(!confirm('Delete '+selectedProducts.size+' selected product(s)? This cannot be undone.'))return;
   const res=await api('/api/products/bulk-delete',{method:'POST',body:Array.from(selectedProducts)});
-  if(res&&res.ok){toast('🗑️ Deleted '+res.deleted+' product(s)');selectedProducts=new Set();await loadAll();renderProducts();}
+  if(res&&res.ok){toast('🗑️ Deleted '+res.deleted+' product(s)');selectedProducts=new Set();await fetchAndRenderProductsPage();}
   else toast('❌ Delete failed','error');
 }
 async function deleteProduct(bc){
   if(!confirm('Delete product '+bc+'? This cannot be undone.'))return;
   const res=await api('/api/products/'+encodeURIComponent(bc),{method:'DELETE'});
-  if(res&&res.ok){toast('🗑️ Deleted');selectedProducts.delete(bc);await loadAll();renderProducts();}
+  if(res&&res.ok){toast('🗑️ Deleted');selectedProducts.delete(bc);await fetchAndRenderProductsPage();}
   else toast('❌ Delete failed','error');
 }
 let editingProductBarcode=null;
 function editProduct(bc){
-  const p=DATA.products.find(x=>String(x.Barcode)===String(bc));
-  if(!p){toast('Product not found','error');return;}
+  const p=prodPageItems.find(x=>String(x.Barcode)===String(bc));
+  if(!p){toast('Product not found — try refreshing the page','error');return;}
   editingProductBarcode=p.Barcode;
   showAddProd();
   const title=$('add-prod-title'); if(title)title.textContent='✏️ Edit Product';
@@ -331,21 +336,47 @@ function editProduct(bc){
   const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));
   if($('p-op'))$('p-op').value=wh?(+wh.OnHand||0):0;
 }
-function renderProducts(){
-  const all=DATA.products||[];
-  prodFilteredList=all.filter(p=>{
-    if(!prodSearchQuery)return true;
-    const q=prodSearchQuery.toLowerCase();
-    return (p.Barcode?.toString().toLowerCase().includes(q))||(p.Name?.toLowerCase().includes(q))||(p.Brand?.toLowerCase().includes(q))||(p.Category?.toLowerCase().includes(q));
-  });
-  const totalPages=Math.ceil(prodFilteredList.length/prodPageSize);
+async function fetchAndRenderProductsPage(){
+  // The only function that hits the server for Product Master. Fetches
+  // just prodPageSize rows (default 20) + a total count — never the full
+  // catalog — so opening/paging/searching Product Master stays fast no
+  // matter how many thousand products exist.
+  const el=$('prod-table');
+  if(el)el.innerHTML='<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">⏳ Loading…</td></tr>';
+  const offset=(prodCurrentPage-1)*prodPageSize;
+  const qs=new URLSearchParams({active_only:'false',limit:String(prodPageSize),offset:String(offset)});
+  if(prodSearchQuery)qs.set('q',prodSearchQuery);
+  const countQs=new URLSearchParams({active_only:'false'});
+  if(prodSearchQuery)countQs.set('q',prodSearchQuery);
+  try{
+    const [rows,countRes]=await Promise.all([
+      api('/api/products?'+qs.toString()),
+      api('/api/products/count?'+countQs.toString()),
+    ]);
+    prodPageItems=Array.isArray(rows)?rows.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'})):[];
+    prodTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:prodPageItems.length;
+    prodFilteredList=prodPageItems; // kept in sync for anything still reading the old name
+  }catch(_e){
+    prodPageItems=[];prodTotalCount=0;
+    toast('❌ Failed to load products','error');
+  }
+  const totalPages=Math.max(1,Math.ceil(prodTotalCount/prodPageSize));
   prodCurrentPage=Math.max(1,Math.min(prodCurrentPage,totalPages));
-  const start=(prodCurrentPage-1)*prodPageSize;
-  const pageItems=prodFilteredList.slice(start,start+prodPageSize);
-  if($('prod-table'))$('prod-table').innerHTML=pageItems.map(p=>{const m=p.Cost&&p.Retail?((p.Retail-p.Cost)/p.Retail*100).toFixed(1):'—';const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));const qty=wh?(+wh.OnHand||0):0;const checked=selectedProducts.has(p.Barcode)?'checked':'';return`<tr><td><input type="checkbox" ${checked} onchange="toggleProduct('${p.Barcode}')"></td><td style="font-family:monospace;font-size:10px">${p.Barcode}</td><td>${qty}</td><td>${fmt(p.Cost||0)}</td><td>${fmt(p.Retail||0)}</td><td class="fw7">${p.Name}</td><td>${p.Brand||'ANTA'}</td><td>${p.Category||''}</td><td>${p.Department||''}</td><td>${p.Season||''}</td><td>${p.Gender||''}</td><td>${p.Size||'—'}</td><td>${p.Color||''}</td><td>${m}%</td><td>${p.Reorder||5}</td><td><span class="badge badge-green">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="editProduct('${p.Barcode}')">✏️</button> <button class="btn btn-ghost btn-sm" onclick="deleteProduct('${p.Barcode}')">🗑️</button></td></tr>`;}).join('')||'<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">No products found</td></tr>';
+  renderProductsTable();
   renderPaginationControls(totalPages);
+}
+function renderProductsTable(){
+  // Redraws the table from the already-fetched page (prodPageItems) with
+  // no server call — used for selection toggles etc. where nothing about
+  // WHICH rows are shown has changed, only their checked state.
+  if($('prod-table'))$('prod-table').innerHTML=prodPageItems.map(p=>{const m=p.Cost&&p.Retail?((p.Retail-p.Cost)/p.Retail*100).toFixed(1):'—';const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));const qty=wh?(+wh.OnHand||0):0;const checked=selectedProducts.has(p.Barcode)?'checked':'';return`<tr><td><input type="checkbox" ${checked} onchange="toggleProduct('${p.Barcode}')"></td><td style="font-family:monospace;font-size:10px">${p.Barcode}</td><td>${qty}</td><td>${fmt(p.Cost||0)}</td><td>${fmt(p.Retail||0)}</td><td class="fw7">${p.Name}</td><td>${p.Brand||'ANTA'}</td><td>${p.Category||''}</td><td>${p.Department||''}</td><td>${p.Season||''}</td><td>${p.Gender||''}</td><td>${p.Size||'—'}</td><td>${p.Color||''}</td><td>${m}%</td><td>${p.Reorder||5}</td><td><span class="badge badge-green">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="editProduct('${p.Barcode}')">✏️</button> <button class="btn btn-ghost btn-sm" onclick="deleteProduct('${p.Barcode}')">🗑️</button></td></tr>`;}).join('')||'<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">No products found</td></tr>';
   const selAll=$('prod-select-all');
-  if(selAll)selAll.checked=prodFilteredList.length>0&&prodFilteredList.every(p=>selectedProducts.has(p.Barcode));
+  if(selAll)selAll.checked=prodPageItems.length>0&&prodPageItems.every(p=>selectedProducts.has(p.Barcode));
+  updateProdSelectedInfo();
+}
+function renderProducts(){
+  // Back-compat shim: any leftover caller just gets a fresh server fetch.
+  fetchAndRenderProductsPage();
 }
 function showAddProd(){
   editingProductBarcode=null;
@@ -611,7 +642,14 @@ function renderCapital(){const invested=capitalEntries.filter(c=>c.type==='inves
 function saveCapital(){}
 async function testConn(){const url=($('api-url')&&$('api-url').value.trim())||CFG.apiUrl;CFG.apiUrl=url.replace(/\/$/,'');localStorage.setItem('anta_ho_api',CFG.apiUrl);const div=$('conn-res');if(div){div.style.display='block';div.innerHTML='⏳ Testing...';}const res=await api('/api/health');if(res&&res.ok){if(div){div.innerHTML='✅ Connected! '+res.app+' v'+res.version;div.style.color='var(--green)';}setSyncStatus('online','Connected');toast('✅ Connected');if($('server-info'))$('server-info').textContent='DB: '+(res.db||'sqlite')+' · modules: '+(res.modules||[]).join(',');}else{if(div){div.innerHTML='❌ Failed';div.style.color='var(--red)';}toast('❌ Failed','error');}}
 function saveSettings(){toast('✅ OK');}
-function exportAll(){const data=JSON.stringify({exportDate:new Date().toISOString(),DATA,suppliers,supplierTxns,capitalEntries},null,2);const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download='anta_ho_backup_'+today()+'.json';a.click();toast('✅ Exported');}
+async function exportAll(){
+  toast('⏳ Preparing backup — fetching full product catalog…','info');
+  const allProducts=await api('/api/products?active_only=false'); // full list, on-demand, export only — never cached in DATA
+  const exportData={...DATA,products:Array.isArray(allProducts)?allProducts:DATA.products};
+  const data=JSON.stringify({exportDate:new Date().toISOString(),DATA:exportData,suppliers,supplierTxns,capitalEntries},null,2);
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download='anta_ho_backup_'+today()+'.json';a.click();
+  toast('✅ Exported');
+}
 function readExcel(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=e=>{try{const data=new Uint8Array(e.target.result);const wb=XLSX.read(data,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true}).map(row=>{const o={};Object.keys(row).forEach(k=>{const key=k.trim();let v=row[k];if(typeof v==='string')v=v.trim();if(/barcode|bar\s*code|sku|item\s*code|product\s*code/i.test(key)&&typeof v==='number'){v=v.toFixed(0);}o[key]=v;});return o;});resolve(rows);}catch(err){reject(err);}};reader.onerror=()=>reject(reader.error);reader.readAsArrayBuffer(file);});}
 function startAutoRefresh(){}
 function updateClock(){if($('clock'))$('clock').textContent=new Date().toLocaleDateString('en-GB')+' · '+new Date().toTimeString().slice(0,5);}
@@ -851,31 +889,30 @@ function renderPaginationControls(totalPages){
   for(let i=startPage;i<=endPage;i++)html+=(i===prodCurrentPage)?`<button class="btn btn-primary btn-sm" style="min-width:30px">${i}</button>`:`<button class="btn btn-ghost btn-sm" onclick="prodCurrentPage=${i};renderProducts()" style="min-width:30px">${i}</button>`;
   if(endPage<totalPages){if(endPage<totalPages-1)html+='<span style="color:var(--gray3)">...</span>';html+=`<button class="btn btn-ghost btn-sm" onclick="prodCurrentPage=${totalPages};renderProducts()">${totalPages}</button>`;}
   if(prodCurrentPage<totalPages)html+=`<button class="btn btn-ghost btn-sm" onclick="prodCurrentPage++;renderProducts()">Next →</button>`;
-  html+=`<span style="margin-left:auto;font-size:11px;color:var(--gray4)">Page ${prodCurrentPage} of ${totalPages} · ${prodFilteredList.length} product(s) match${prodSearchQuery?` "${prodSearchQuery}"`:''}</span></div>`;
+  html+=`<span style="margin-left:auto;font-size:11px;color:var(--gray4)">Page ${prodCurrentPage} of ${totalPages} · ${prodTotalCount} product(s) match${prodSearchQuery?` "${prodSearchQuery}"`:''}</span></div>`;
   container.innerHTML=html;
   updateProdSelectedInfo();
 }
 let prodSearchDebounce=null;
 function searchProducts(query){
   clearTimeout(prodSearchDebounce);
-  prodSearchDebounce=setTimeout(()=>{prodSearchQuery=String(query||'').trim();prodCurrentPage=1;renderProducts();},180);
+  prodSearchDebounce=setTimeout(()=>{prodSearchQuery=String(query||'').trim();prodCurrentPage=1;fetchAndRenderProductsPage();},180);
 }
 function doProductSearch(){
   clearTimeout(prodSearchDebounce);
   prodSearchQuery=($('prod-search')&&$('prod-search').value||'').trim();
   prodCurrentPage=1;
-  renderProducts();
+  fetchAndRenderProductsPage();
 }
 function clearProductSearch(){
   clearTimeout(prodSearchDebounce);
   if($('prod-search'))$('prod-search').value='';
   prodSearchQuery='';
   prodCurrentPage=1;
-  renderProducts();
+  fetchAndRenderProductsPage();
 }
 function updateProdSelectedInfo(){
   const el=$('prod-selected-info');
   if(!el)return;
-  const totalMatching=prodFilteredList.length;
-  el.textContent=selectedProducts.size?`✅ ${selectedProducts.size} of ${totalMatching} product(s) selected`:`${totalMatching} product(s) total`;
+  el.textContent=selectedProducts.size?`✅ ${selectedProducts.size} product(s) selected · ${prodTotalCount} total match`:`${prodTotalCount} product(s) total`;
 }

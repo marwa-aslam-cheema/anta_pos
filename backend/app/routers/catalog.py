@@ -181,6 +181,27 @@ def count_products(
         like = f"%{q}%"
         query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
     return {"ok": True, "count": query.count()}
+
+
+@router.get("/products/lookup/{barcode}")
+def lookup_product(
+    barcode: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+):
+    """Look up a single product by exact barcode — used by GRN/Transfer
+    forms to auto-fill name/cost as you type a barcode, without needing
+    the whole catalog loaded client-side."""
+    p = db.query(Product).filter(Product.barcode == barcode).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {
+        "ok": True,
+        "barcode": p.barcode,
+        "name": p.name,
+        "cost": p.cost or 0,
+        "retail": p.retail or 0,
+    }
  
  
 @router.post("/products", response_model=ProductOut)
