@@ -116,6 +116,7 @@ async function api(path, opts = {}) {
       method: opts.method || 'GET',
       headers: authHeaders(!!opts.body),
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     });
     if (res.status === 401) {
       // token expired
@@ -130,7 +131,8 @@ async function api(path, opts = {}) {
     }
     return data;
   } catch (e) {
-    return { ok: false, status: 'error', msg: e.message };
+    const msg = e.name === 'AbortError' ? 'timed out — server may be slow or asleep, try again' : e.message;
+    return { ok: false, status: 'error', msg, timedOut: e.name === 'AbortError' };
   }
 }
 
@@ -852,6 +854,17 @@ async function loadGRNs() {
     )
     .join('');
 }
+function downloadReceiveErrorLog(rows) {
+  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const header = ['GRN ID', 'Barcode', 'Qty', 'Status', 'Reason'];
+  const csv = [header.join(',')]
+    .concat(rows.map((r) => [r.grnId, r.barcode, r.qty, r.status, r.reason].map(esc).join(',')))
+    .join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'grn_receive_errors_' + today() + '.csv';
+  a.click();
+}
 async function receiveGRN(grnId, btn) {
   const original = btn.textContent;
   btn.disabled = true;
@@ -861,33 +874,50 @@ async function receiveGRN(grnId, btn) {
   const inputs = document.querySelectorAll(`[id^="recv-${grnId}-"]`);
   let count = 0;
   let failed = 0;
+  const logRows = [];
   try {
     for (const inp of inputs) {
       const barcode = inp.id.replace(`recv-${grnId}-`, '');
       const qty = parseInt(inp.value) || 0;
       if (qty > 0) {
-        const res = await api('/api/grns/receive', {
-          method: 'POST',
-          body: {
-            grnId,
-            barcode,
-            qty,
-            storeId: DB.settings.storeId,
-            storeName: DB.settings.storeName,
-          },
-        });
+        // Each request gets its own 45s timeout — if the server never
+        // responds (cold start, network drop, whatever), this stops the
+        // button from waiting forever and turns it into a clear failure
+        // instead, with the reason captured for the diagnostic log.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        let res;
+        try {
+          res = await api('/api/grns/receive', {
+            method: 'POST',
+            body: {
+              grnId,
+              barcode,
+              qty,
+              storeId: DB.settings.storeId,
+              storeName: DB.settings.storeName,
+            },
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
         if (res && res.ok !== false) {
           adjustLocalStock(barcode, qty);
           count++;
         } else {
           failed++;
-          toast(`❌ ${barcode}: ${(res && res.msg) || 'failed'}`, 'error');
+          const reason = (res && res.msg) || 'failed';
+          logRows.push({ grnId, barcode, qty, status: 'failed', reason });
+          toast(`❌ ${barcode}: ${reason}`, 'error');
         }
       }
     }
     if (count) toast(`✅ GRN ${grnId} — ${count} item(s) received` + (failed ? `, ${failed} failed` : ''), failed ? 'warn' : 'ok');
     else if (failed) toast(`❌ GRN ${grnId} — all ${failed} item(s) failed`, 'error');
   } catch (e) {
+    failed++;
+    logRows.push({ grnId, barcode: '?', qty: '', status: 'failed', reason: e.message });
     toast('❌ Receive failed: ' + e.message, 'error');
   } finally {
     // Always restore the button and refresh, even if something above
@@ -896,6 +926,9 @@ async function receiveGRN(grnId, btn) {
     clearInterval(timer);
     btn.disabled = false;
     btn.textContent = original;
+    // Only download a log when something actually went wrong — a clean
+    // receive shouldn't dump a file on the cashier for no reason.
+    if (logRows.length) downloadReceiveErrorLog(logRows);
     loadGRNs();
     reloadCatalog();
   }
