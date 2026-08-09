@@ -236,7 +236,12 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
         store_cols = {}
         total = 0
         for s in stores:
-            oh = inv_by_key.get((p.barcode, s.store_id), int(p.opening or 0))
+            # Must default to 0, not p.opening — opening is HO Warehouse's
+            # starting stock, not this store's. Falling back to it here
+            # was the exact same phantom-stock bug reintroduced by this
+            # perf refactor (see inventory.py get_or_create_inv for the
+            # full explanation).
+            oh = inv_by_key.get((p.barcode, s.store_id), 0)
             store_cols[s.store_id] = oh
             total += oh
         ho = ho_by_barcode.get(p.barcode, 0)
