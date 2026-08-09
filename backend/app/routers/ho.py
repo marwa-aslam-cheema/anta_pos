@@ -149,6 +149,17 @@ def delete_all_warehouse(db: Annotated[Session, Depends(get_db)], user: Annotate
     return {"ok": True, "status": "ok", "deleted": n}
 
 
+@router.post("/warehouse/bulk-delete")
+def bulk_delete_warehouse(barcodes: list[str], db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Delete selected HO Warehouse stock rows by barcode (Products stay,
+    only the warehouse stock counters for these barcodes are removed)."""
+    if not barcodes:
+        return {"ok": True, "status": "ok", "deleted": 0}
+    n = db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": n}
+
+
 @router.get("/supplier-grns")
 def list_supplier_grns(
     db: Annotated[Session, Depends(get_db)],

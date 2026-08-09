@@ -158,7 +158,33 @@ if($('d-low'))$('d-low').innerHTML=(d.lowStock||[]).slice(0,8).map(i=>`<tr><td s
 const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];
 const sb=DATA.dashboard?.storeBreakdown||[];if($('store-cards'))$('store-cards').innerHTML=stores.map(s=>{const b=sb.find(x=>x.store===s.Name||x.store===s.StoreID||x.name===s.Name);return`<div class="store-card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><div style="font-weight:800;color:var(--navy)">${s.Name}</div><span class="badge ${b?'badge-green':'badge-gray'}">${b?'✅ Live':'No Data'}</span></div>${b?`<div class="store-kpis"><div class="store-kpi"><div class="store-kpi-label">Revenue</div><div class="store-kpi-value">${fmt(b.revenue||0)}</div></div><div class="store-kpi"><div class="store-kpi-label">Invoices</div><div class="store-kpi-value">${b.invoices||0}</div></div><div class="store-kpi"><div class="store-kpi-label">Returns</div><div class="store-kpi-value">${fmt(b.returns||0)}</div></div><div class="store-kpi"><div class="store-kpi-label">Net</div><div class="store-kpi-value">${fmt((b.revenue||0)-(b.returns||0))}</div></div></div>`:'<div style="text-align:center;padding:16px;color:var(--gray3);font-size:12px">No data</div>'}</div>`;}).join('');}
 function renderStoresView(){const sb=DATA.dashboard?.storeBreakdown||[];const stores=DATA.stores.filter(s=>s.StoreID!=='HO');const rows=stores.map(s=>{const b=sb.find(x=>x.store===s.Name||x.store===s.StoreID)||{revenue:0,invoices:0,returns:0};return{name:s.Name,rev:b.revenue||0,inv:b.invoices||0,ret:b.returns||0,net:(b.revenue||0)-(b.returns||0),atv:b.invoices?b.revenue/b.invoices:0,retPct:b.revenue?b.returns/b.revenue*100:0};}).sort((a,b)=>b.rev-a.rev);const maxR=Math.max(...rows.map(r=>r.rev),1);if($('sv-table'))$('sv-table').innerHTML=rows.map((r,i)=>`<tr><td class="fw7">${i+1}</td><td class="fw7">${r.name}</td><td>${fmt(r.rev)}</td><td>${r.inv}</td><td>${fmt(r.atv)}</td><td class="text-red">${fmt(r.ret)}</td><td>${r.retPct.toFixed(1)}%</td><td class="fw7">${fmt(r.net)}</td><td><span class="badge ${r.rev>0?'badge-green':'badge-gray'}">${r.rev>0?'Active':'No Data'}</span></td></tr>`).join('');}
-function renderWarehouse(){const search=(($('wh-search')||{}).value||'').toLowerCase();const data=DATA.warehouse.filter(w=>!search||(w.Name||'').toLowerCase().includes(search)||String(w.Barcode).includes(search));if($('wh-table'))$('wh-table').innerHTML=data.map(w=>{const oh=+w.OnHand||0;return`<tr><td style="font-family:monospace;font-size:10px">${w.Barcode}</td><td class="fw7">${w.Name}</td><td>${w.Brand||'—'}</td><td class="text-green">${w.Supplier_In||0}</td><td class="text-red">${w.Store_Out||0}</td><td style="font-weight:800;color:${oh<=0?'var(--red)':oh<=5?'var(--amber)':'var(--navy)'}">${oh}</td><td><button class="btn btn-primary btn-sm" onclick="sendToStore('${w.Barcode}','${(w.Name||'').replace(/'/g,"\\'")}',${oh})">Send</button></td></tr>`;}).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:18px">No warehouse data</td></tr>';}
+let selectedWarehouse=new Set();
+let whFilteredList=[];
+function renderWarehouse(){
+  const search=(($('wh-search')||{}).value||'').toLowerCase();
+  whFilteredList=DATA.warehouse.filter(w=>!search||(w.Name||'').toLowerCase().includes(search)||String(w.Barcode).includes(search));
+  if($('wh-table'))$('wh-table').innerHTML=whFilteredList.map(w=>{
+    const oh=+w.OnHand||0;const checked=selectedWarehouse.has(w.Barcode)?'checked':'';
+    return `<tr><td><input type="checkbox" ${checked} onchange="toggleWarehouseRow('${w.Barcode}')"></td><td style="font-family:monospace;font-size:10px">${w.Barcode}</td><td class="fw7">${w.Name}</td><td>${w.Brand||'—'}</td><td class="text-green">${w.Supplier_In||0}</td><td class="text-red">${w.Store_Out||0}</td><td style="font-weight:800;color:${oh<=0?'var(--red)':oh<=5?'var(--amber)':'var(--navy)'}">${oh}</td><td><button class="btn btn-primary btn-sm" onclick="sendToStore('${w.Barcode}','${(w.Name||'').replace(/'/g,"\\'")}',${oh})">Send</button></td></tr>`;
+  }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:18px">No warehouse data</td></tr>';
+  const selAll=$('wh-select-all');
+  if(selAll)selAll.checked=whFilteredList.length>0&&whFilteredList.every(w=>selectedWarehouse.has(w.Barcode));
+  const info=$('wh-selected-info');
+  if(info)info.textContent=selectedWarehouse.size?`✅ ${selectedWarehouse.size} row(s) selected`:`${whFilteredList.length} row(s) shown`;
+}
+function toggleWarehouseRow(bc){if(selectedWarehouse.has(bc))selectedWarehouse.delete(bc);else selectedWarehouse.add(bc);renderWarehouse();}
+function toggleAllWarehouse(cb){
+  if(cb.checked)whFilteredList.forEach(w=>selectedWarehouse.add(w.Barcode));
+  else whFilteredList.forEach(w=>selectedWarehouse.delete(w.Barcode));
+  renderWarehouse();
+}
+async function deleteSelectedWarehouse(){
+  if(!selectedWarehouse.size){toast('No rows selected','error');return;}
+  if(!confirm(`Delete ${selectedWarehouse.size} selected warehouse row(s)? Products stay in Product Master — only warehouse stock is removed. Cannot be undone.`))return;
+  const res=await api('/api/ho/warehouse/bulk-delete',{method:'POST',body:Array.from(selectedWarehouse)});
+  if(res&&res.ok){toast(`✅ Deleted ${res.deleted} row(s)`);selectedWarehouse=new Set();await loadAll();renderWarehouse();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
 function sendToStore(barcode,name,hoStock){
   // "Send" from HO Warehouse jumps to Send-to-Stores and pre-fills THIS
   // product's line, instead of dropping you on an empty form you have to
@@ -728,35 +754,47 @@ async function loadExpenses(){const el=$('exp-ho-table')||$('exp-table');if(!el)
 function rptPreset(){const p=($('rpt-preset')||{}).value||'today',d=today(),now=new Date();if(!$('rpt-from'))return;if(p==='today'){$('rpt-from').value=d;$('rpt-to').value=d;}else if(p==='yesterday'){const y=new Date(now);y.setDate(y.getDate()-1);const yd=y.toISOString().split('T')[0];$('rpt-from').value=yd;$('rpt-to').value=yd;}else if(p==='week'){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());$('rpt-from').value=ws.toISOString().split('T')[0];$('rpt-to').value=d;}else{$('rpt-from').value=d.slice(0,7)+'-01';$('rpt-to').value=d;}}
 async function loadReports(){const qs=new URLSearchParams();if($('rpt-from')?.value)qs.set('from',$('rpt-from').value);if($('rpt-to')?.value)qs.set('to',$('rpt-to').value);if($('rpt-store')?.value&&$('rpt-store').value!=='all')qs.set('store',$('rpt-store').value);const res=await api('/api/reports?'+qs);if(!res||!res.ok){toast('Report failed','error');return;}window.__lastReport=res;if($('rpt-kpis'))$('rpt-kpis').innerHTML=[['Revenue',fmt(res.revenue),''],['Net',fmt(res.net),'blue'],['Invoices',res.invoices,'green'],['ATV',fmt(res.atv),'amber'],['Units',res.units,'purple'],['Cost',fmt(res.totalCost||0),''],['Profit',fmt(res.totalProfit||0),'green'],['Margin',(res.margin||0)+'%','teal'],['Returns',fmt(res.returns),'']].map(([l,v,c])=>`<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');const pm=res.paymentBreakdown||{},rev=res.revenue||0;if($('rpt-pay'))$('rpt-pay').innerHTML=Object.entries(pm).map(([m,v])=>{const pct=rev?Math.round(v/rev*100):0;return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px"><span>${m}</span><span class="fw7">${fmt(v)} (${pct}%)</span></div><div style="background:var(--gray1);border-radius:4px;height:7px"><div style="background:var(--accent2);width:${pct}%;height:100%;border-radius:4px"></div></div></div>`;}).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-prod'))$('rpt-prod').innerHTML=(res.productBreakdown||[]).map(p=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--gray1);font-size:11px"><span class="fw7">${p.name}</span><span>${p.qty} · ${fmt(p.revenue)}</span></div>`).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-txns'))$('rpt-txns').innerHTML=(res.transactions||[]).slice(0,150).map(x=>`<tr><td class="fw7">${x.id}</td><td>${x.date||''}</td><td>${x.time||''}</td><td>${x.store||''}</td><td>${x.customer||''}</td><td style="text-align:center">${x.items||0}</td><td style="text-align:center">${x.units||0}</td><td style="font-size:10px;max-width:220px">${x.productList||''}</td><td>${fmt(x.subtotal||0)}</td><td>${fmt(x.discount||0)}</td><td>${fmt(x.cost||0)}</td><td class="fw7" style="color:var(--green)">${fmt(x.profit||0)}</td><td>${x.margin||0}%</td><td>${x.payment||''}</td><td>${x.payRef||''}</td><td class="fw7">${fmt(x.total||0)}</td></tr>`).join('')||'<tr><td colspan="16" style="text-align:center;color:var(--gray3);padding:14px">None</td></tr>';}
 function exportRpt(){const rows=(window.__lastReport&&window.__lastReport.transactions)||[];const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};const header=['Invoice','Date','Time','Store','Customer','Items','Units','Products','Subtotal','Discount','Cost','Profit','Margin%','Payment','Ref','Total'];const csv=[header.join(',')].concat(rows.map(x=>[x.id,x.date,x.time,x.store,x.customer,x.items,x.units,x.productList,x.subtotal,x.discount,x.cost,x.profit,x.margin,x.payment,x.payRef,x.total].map(esc).join(','))).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='anta_ho_report_'+today()+'.csv';a.click();}
-async function resetAllStores(){
+async function runWithElapsedTimer(btn,label,fn){
+  // Shows a live "⏳ Working… Ns" ticker right on the button that triggered
+  // it — same idea as the upload progress bar, just for single-call admin
+  // actions (recalculate/reset/delete-all) so a cold-start wait never
+  // looks like the button did nothing.
+  const original=btn?btn.innerHTML:'';
+  let secs=0;
+  const timer=setInterval(()=>{secs++;if(btn)btn.innerHTML=`⏳ ${label}… ${secs}s`;},1000);
+  if(btn){btn.disabled=true;btn.innerHTML=`⏳ ${label}… 0s`;}
+  try{
+    return await fn();
+  } finally {
+    clearInterval(timer);
+    if(btn){btn.disabled=false;btn.innerHTML=original;}
+  }
+}
+async function resetAllStores(btn){
   if(!confirm('Reset ALL stores\' stock to 0? This clears every store\'s inventory counters (grn/sold/returns/on-hand) in one go — Sales/Returns/Exchange records themselves are NOT deleted, only the stock summary. This cannot be undone. Continue?'))return;
-  if(!confirm('Are you absolutely sure? Type-to-confirm not required, but this affects ALL stores at once.'))return;
-  toast('⏳ Resetting all stores…','info');
-  const res=await api('/api/inventory/reset-all-stores',{method:'POST'});
+  if(!confirm('Are you absolutely sure? This affects ALL stores at once.'))return;
+  const res=await runWithElapsedTimer(btn,'Resetting',()=>api('/api/inventory/reset-all-stores',{method:'POST'}));
   if(res&&res.ok){toast(`✅ Reset done — ${res.deleted} row(s) cleared`);renderInvAll();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Reset failed'),'error');
 }
-async function deleteAllWarehouse(){
+async function deleteAllWarehouse(btn){
   if(!confirm('Delete ALL HO Warehouse stock rows? Products in Product Master are NOT deleted — only warehouse stock counters. This cannot be undone. Continue?'))return;
-  toast('⏳ Deleting all warehouse stock…','info');
-  const res=await api('/api/ho/warehouse/all',{method:'DELETE'});
+  const res=await runWithElapsedTimer(btn,'Deleting',()=>api('/api/ho/warehouse/all',{method:'DELETE'}));
   if(res&&res.ok){toast(`✅ Deleted ${res.deleted} row(s)`);await loadAll();renderWarehouse();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
-async function deleteAllGrnLines(){
+async function deleteAllGrnLines(btn){
   if(!confirm('Delete ALL Supplier GRN lines? HO Warehouse supplier-in stock resets to 0 for every product (stock already sent to stores is untouched). This cannot be undone. Continue?'))return;
-  toast('⏳ Deleting all GRN lines…','info');
-  const res=await api('/api/ho/supplier-grn-lines/all',{method:'DELETE'});
+  const res=await runWithElapsedTimer(btn,'Deleting',()=>api('/api/ho/supplier-grn-lines/all',{method:'DELETE'}));
   if(res&&res.ok){toast(`✅ Deleted ${res.deleted} line(s)`);selectedGrnLines=new Set();await loadAll();sgrnHistCurrentPage=1;await fetchAndRenderSGRNHist();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
-async function recalculateStoreInventory(){
+async function recalculateStoreInventory(btn){
   const storeId=$('recalc-store')&&$('recalc-store').value;
   if(!storeId){toast('Select a store','error');return;}
   const storeName=(DATA.stores.find(s=>s.StoreID===storeId)||{}).Name||storeId;
   if(!confirm(`Recalculate stock for ${storeName}? This rebuilds it strictly from actually-received GRN history — sales/returns/exchanges are untouched. Safe, but do this once you're sure the store's GRN history is correct.`))return;
-  toast('⏳ Recalculating…','info');
-  const res=await api('/api/inventory/recalculate?store_id='+encodeURIComponent(storeId),{method:'POST'});
+  const res=await runWithElapsedTimer(btn,'Recalculating',()=>api('/api/inventory/recalculate?store_id='+encodeURIComponent(storeId),{method:'POST'}));
   if(res&&res.ok){toast(`✅ Fixed — ${res.updated} product(s) corrected for ${storeName}`);renderInvAll();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Recalculate failed'),'error');
 }

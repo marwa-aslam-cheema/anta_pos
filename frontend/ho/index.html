@@ -137,11 +137,16 @@ body{display:flex;height:100vh;overflow:hidden}
   <!-- HO WAREHOUSE -->
   <div id="screen-warehouse" class="screen">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px;gap:10px;flex-wrap:wrap">
         <div class="card-title" style="margin:0">🏭 HO Warehouse — Live Stock</div>
-        <input class="form-input" style="width:200px;padding:5px 9px" id="wh-search" placeholder="🔍 Search..." oninput="renderWarehouse()">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input class="form-input" style="width:200px;padding:5px 9px" id="wh-search" placeholder="🔍 Search..." oninput="renderWarehouse()">
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSelectedWarehouse()">🗑️ Delete Selected</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteAllWarehouse(this)">🗑️ Delete All</button>
+        </div>
       </div>
-      <table><thead><tr><th>Barcode</th><th>Product</th><th>Brand</th><th>Supplier In</th><th>Store Out</th><th>ON HAND</th><th>Action</th></tr></thead>
+      <div id="wh-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:9px"></div>
+      <table><thead><tr><th><input type="checkbox" id="wh-select-all" onchange="toggleAllWarehouse(this)" title="Select/deselect all currently shown rows"></th><th>Barcode</th><th>Product</th><th>Brand</th><th>Supplier In</th><th>Store Out</th><th>ON HAND</th><th>Action</th></tr></thead>
       <tbody id="wh-table"></tbody></table>
     </div>
   </div>
@@ -209,6 +214,7 @@ body{display:flex;height:100vh;overflow:hidden}
           <button class="btn btn-ghost btn-sm" onclick="selectAllMatchingGrnLines()">☑️ Select All Matching (all pages)</button>
           <button class="btn btn-ghost btn-sm" onclick="clearGrnLineSelection()">✕ Clear Selection</button>
           <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSelectedGrnLines()">🗑️ Delete Selected</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteAllGrnLines(this)">🗑️ Delete ALL GRN Lines</button>
         </div>
         <div id="sgrn-hist-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:9px"></div>
         <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th><input type="checkbox" id="sgrn-hist-select-all" onchange="toggleAllGrnLines(this)" title="Select/deselect this page only"></th><th>GRN ID</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Qty</th><th>Cost</th><th>Actions</th></tr></thead>
@@ -492,7 +498,8 @@ body{display:flex;height:100vh;overflow:hidden}
       </p>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select class="form-input" id="recalc-store" style="width:220px"></select>
-        <button class="btn btn-primary btn-sm" onclick="recalculateStoreInventory()">🔄 Recalculate This Store's Stock</button>
+        <button class="btn btn-primary btn-sm" onclick="recalculateStoreInventory(this)">🔄 Recalculate This Store's Stock</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="resetAllStores(this)">♻️ Reset ALL Stores to 0</button>
       </div>
     </div>
     <div class="card">
@@ -500,7 +507,7 @@ body{display:flex;height:100vh;overflow:hidden}
         <div class="card-title" style="margin:0">🗃️ Inventory — All Stores</div>
         <input class="form-input" style="width:200px;padding:5px 9px" id="inv-search" placeholder="🔍 Search..." oninput="renderInvAll()">
       </div>
-      <table><thead><tr><th>Barcode</th><th>Product</th><th id="inv-s1">Store 1</th><th id="inv-s2">Store 2</th><th id="inv-s3">Store 3</th><th>Total Stock</th><th>Status</th></tr></thead>
+      <table><thead><tr><th>Barcode</th><th>Product</th><th>HO Stock</th><th id="inv-s1">Store 1</th><th id="inv-s2">Store 2</th><th id="inv-s3">Store 3</th><th>Total Stock</th></tr></thead>
       <tbody id="inv-all-table"></tbody></table>
     </div>
   </div>
