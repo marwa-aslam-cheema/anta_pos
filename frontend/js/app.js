@@ -853,31 +853,52 @@ async function loadGRNs() {
     .join('');
 }
 async function receiveGRN(grnId, btn) {
+  const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '⏳ Processing...';
+  let secs = 0;
+  const timer = setInterval(() => { secs++; btn.textContent = `⏳ Processing… ${secs}s`; }, 1000);
+  btn.textContent = '⏳ Processing… 0s';
   const inputs = document.querySelectorAll(`[id^="recv-${grnId}-"]`);
   let count = 0;
-  for (const inp of inputs) {
-    const barcode = inp.id.replace(`recv-${grnId}-`, '');
-    const qty = parseInt(inp.value) || 0;
-    if (qty > 0) {
-      await api('/api/grns/receive', {
-        method: 'POST',
-        body: {
-          grnId,
-          barcode,
-          qty,
-          storeId: DB.settings.storeId,
-          storeName: DB.settings.storeName,
-        },
-      });
-      adjustLocalStock(barcode, qty);
-      count++;
+  let failed = 0;
+  try {
+    for (const inp of inputs) {
+      const barcode = inp.id.replace(`recv-${grnId}-`, '');
+      const qty = parseInt(inp.value) || 0;
+      if (qty > 0) {
+        const res = await api('/api/grns/receive', {
+          method: 'POST',
+          body: {
+            grnId,
+            barcode,
+            qty,
+            storeId: DB.settings.storeId,
+            storeName: DB.settings.storeName,
+          },
+        });
+        if (res && res.ok !== false) {
+          adjustLocalStock(barcode, qty);
+          count++;
+        } else {
+          failed++;
+          toast(`❌ ${barcode}: ${(res && res.msg) || 'failed'}`, 'error');
+        }
+      }
     }
+    if (count) toast(`✅ GRN ${grnId} — ${count} item(s) received` + (failed ? `, ${failed} failed` : ''), failed ? 'warn' : 'ok');
+    else if (failed) toast(`❌ GRN ${grnId} — all ${failed} item(s) failed`, 'error');
+  } catch (e) {
+    toast('❌ Receive failed: ' + e.message, 'error');
+  } finally {
+    // Always restore the button and refresh, even if something above
+    // threw or failed — this is what stops it from ever staying stuck
+    // on "Processing..." forever.
+    clearInterval(timer);
+    btn.disabled = false;
+    btn.textContent = original;
+    loadGRNs();
+    reloadCatalog();
   }
-  toast(`✅ GRN ${grnId} received — ${count} items`);
-  loadGRNs();
-  reloadCatalog();
 }
 
 /* ---------- INVENTORY ---------- */

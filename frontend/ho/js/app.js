@@ -235,6 +235,7 @@ async function saveSGRN(){
     bupUpdate({prefix:'sgrn-bup',status:'⏳ Saving GRN… keep this tab open',done:Math.min(i+CHUNK,sgrnLines.length),total:sgrnLines.length,startTime,failed});
   }
   bupUpdate({prefix:'sgrn-bup',status:'✅ Done',done:sgrnLines.length,total:sgrnLines.length,startTime,failed});
+  setTimeout(()=>bupHide('sgrn-bup'),2500);
   if(saved){
     toast(`✅ GRN ${grnId} — ${saved} item(s) saved`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
     sgrnLines=[];renderSGRNLines();$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);
@@ -243,7 +244,6 @@ async function saveSGRN(){
     toast('❌ GRN save failed — 0 items saved. Check the downloaded log for the reason.','error');
   }
   if(logRows.length)downloadEventLog(logRows);
-  setTimeout(()=>bupHide('sgrn-bup'),2500);
 }
 async function deleteSupplierGRN(grnId){
   if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
@@ -370,6 +370,7 @@ async function issueStoreGRN(){
     bupUpdate({prefix:'stgrn-bup',status:'⏳ Issuing stock… keep this tab open',done:Math.min(i+CHUNK,stgrnLines.length),total:stgrnLines.length,startTime,failed});
   }
   bupUpdate({prefix:'stgrn-bup',status:'✅ Done',done:stgrnLines.length,total:stgrnLines.length,startTime,failed});
+  setTimeout(()=>bupHide('stgrn-bup'),2500);
   if(saved){
     toast(`✅ Issued ${saved} item(s)`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
     stgrnLines=[];renderStGRNLines();$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);
@@ -378,7 +379,6 @@ async function issueStoreGRN(){
     toast('❌ Issue failed — 0 items saved. Check the downloaded log for the reason.','error');
   }
   if(logRows.length)downloadEventLog(logRows);
-  setTimeout(()=>bupHide('stgrn-bup'),2500);
 }
 async function deleteStoreGRN(grnId){
   if(!confirm(`Delete GRN ${grnId}? This reverses the stock it reserved from HO Warehouse. Only works while it's still pending (not yet received by the store).`))return;
@@ -737,6 +737,7 @@ async function uploadProducts(file){
     bupUpdate({status:'⏳ Uploading products… keep this tab open',done:doneSoFar,total:items.length,startTime,failed});
   }
   bupUpdate({status:'✅ Upload complete',done:items.length,total:items.length,startTime,failed});
+  setTimeout(bupHide,4000);
   if(created||updated){
     toast('✅ Uploaded — '+created+' created, '+updated+' updated'+(failed?(', '+failed+' failed — see downloaded event log'):''), failed?'warn':'ok');
   } else {
@@ -745,7 +746,6 @@ async function uploadProducts(file){
   downloadEventLog(logRows);
   await loadAll();
   renderProducts();
-  setTimeout(bupHide,4000);
 }
 function plPreset(){const p=($('pl-period')||{}).value||'month',d=today(),now=new Date();if(!$('pl-from'))return;if(p==='today'){$('pl-from').value=d;$('pl-to').value=d;}else if(p==='week'){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());$('pl-from').value=ws.toISOString().split('T')[0];$('pl-to').value=d;}else if(p==='month'){$('pl-from').value=d.slice(0,7)+'-01';$('pl-to').value=d;}else{$('pl-from').value=d.slice(0,4)+'-01-01';$('pl-to').value=d;}}
 async function loadPL(){const qs=new URLSearchParams();if($('pl-from')?.value)qs.set('from',$('pl-from').value);if($('pl-to')?.value)qs.set('to',$('pl-to').value);if($('pl-store')?.value)qs.set('store',$('pl-store').value);const pl=await api('/api/ho/pl?'+qs);if(!pl||!pl.ok){toast('P&L failed','error');return;}if($('pl-kpis'))$('pl-kpis').innerHTML=[['Revenue',fmt(pl.revenue),''],['COGS',fmt(pl.cogs),'amber'],['Gross Profit',fmt(pl.grossProfit),'green'],['GM%',((pl.grossMargin||0)*100).toFixed(1)+'%','blue'],['Expenses',fmt(pl.totalExpenses),'purple'],['EBITDA',fmt(pl.ebitda),'teal']].map(([l,v,c])=>`<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');const rows=[['Net Revenue','netRevenue'],['COGS','cogs'],['Gross Profit','grossProfit'],['Gross Margin %','grossMargin',true],['Total Expenses','totalExpenses'],['EBITDA','ebitda']];if($('pl-table'))$('pl-table').innerHTML=rows.map(([label,key,pct])=>`<tr style="${key==='ebitda'||key==='grossProfit'?'font-weight:800;background:var(--gray0)':''}"><td>${label}</td><td class="text-right fw7">${pct?((pl[key]||0)*100).toFixed(1)+'%':fmt(pl[key]||0)}</td><td class="text-right">${pct?'':pl.netRevenue?((pl[key]||0)/pl.netRevenue*100).toFixed(1)+'%':'—'}</td></tr>`).join('');}
