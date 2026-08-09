@@ -87,45 +87,100 @@ def delete_category(
     return {"ok": True, "status": "ok", "categories": cats}
  
  
-@router.get("/products", response_model=list[ProductOut])
+@router.get("/products")
 def list_products(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[CurrentUser, Depends(get_current_user)],
     q: Optional[str] = None,
     store_id: Optional[str] = None,
     active_only: bool = True,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ):
+    """List products.
+
+    Two perf fixes here that matter a lot once the catalog has thousands
+    of rows:
+    1. Stock is now computed with ONE query for the whole store instead of
+       a query per product. The old version called get_stock() per row,
+       which for a store login (POS) issued up to 2 queries per product —
+       for 6,687 products that's 13,000+ queries on every catalog sync,
+       every 60 seconds via auto-refresh. That alone could make a big
+       catalog feel like it never finishes loading.
+    2. This no longer validates the result through the ProductOut Pydantic
+       model (FastAPI's response_model does this automatically, and for
+       thousands of rows that validation pass has a real CPU cost on a
+       throttled free-tier instance). Plain dicts with the same shape are
+       returned directly instead.
+
+    `limit`/`offset` are optional — omit them to get the full list (used by
+    POS, which needs the whole catalog to scan barcodes locally); pass them
+    to page through the list server-side (used by the HO Product Master
+    screen so it never has to pull all rows at once).
+    """
     query = db.query(Product)
     if active_only:
         query = query.filter(Product.active.is_(True))
     if q:
         like = f"%{q}%"
         query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
-    rows = query.order_by(Product.name).all()
+    query = query.order_by(Product.name)
+    if limit is not None:
+        query = query.offset(offset).limit(limit)
+    rows = query.all()
+
     sid = store_id or user.store_id
+    stock_by_barcode: dict[str, int] | None = None
+    if sid and sid != "HO":
+        stock_by_barcode = {
+            barcode: int(on_hand or 0)
+            for barcode, on_hand in db.query(Inventory.barcode, Inventory.on_hand)
+            .filter(Inventory.store_id == str(sid))
+            .all()
+        }
+
     out = []
     for p in rows:
-        stock = get_stock(db, p.barcode, sid) if sid and sid != "HO" else None
-        out.append(
-            ProductOut(
-                barcode=p.barcode,
-                name=p.name,
-                brand=p.brand or "ANTA",
-                category=p.category or "",
-                size=p.size or "",
-                color=getattr(p, "color", "") or "",
-                department=getattr(p, "department", "") or "",
-                season=getattr(p, "season", "") or "",
-                gender=getattr(p, "gender", "") or "",
-                cost=p.cost or 0,
-                retail=p.retail or 0,
-                reorder=p.reorder or 5,
-                opening=p.opening or 0,
-                active=bool(p.active),
-                stock=stock,
-            )
-        )
+        if stock_by_barcode is not None:
+            stock = stock_by_barcode.get(p.barcode, int(p.opening or 0))
+        else:
+            stock = None
+        out.append({
+            "barcode": p.barcode,
+            "name": p.name,
+            "brand": p.brand or "ANTA",
+            "category": p.category or "",
+            "size": p.size or "",
+            "color": getattr(p, "color", "") or "",
+            "department": getattr(p, "department", "") or "",
+            "season": getattr(p, "season", "") or "",
+            "gender": getattr(p, "gender", "") or "",
+            "cost": p.cost or 0,
+            "retail": p.retail or 0,
+            "reorder": p.reorder or 5,
+            "opening": p.opening or 0,
+            "active": bool(p.active),
+            "stock": stock,
+        })
     return out
+
+
+@router.get("/products/count")
+def count_products(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    q: Optional[str] = None,
+    active_only: bool = True,
+):
+    """Total matching product count, for building pagination UI without
+    having to fetch every row just to count them."""
+    query = db.query(Product)
+    if active_only:
+        query = query.filter(Product.active.is_(True))
+    if q:
+        like = f"%{q}%"
+        query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
+    return {"ok": True, "count": query.count()}
  
  
 @router.post("/products", response_model=ProductOut)
