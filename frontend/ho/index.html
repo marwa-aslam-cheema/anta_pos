@@ -203,9 +203,17 @@ body{display:flex;height:100vh;overflow:hidden}
       </div>
       <div class="card">
         <div class="card-title">📋 Supplier GRN History</div>
-        <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">Mistake ho jaye to 🗑 se GRN delete karein — stock automatically reverse ho jayega, phir sahi file dobara upload karein.</p>
-        <table><thead><tr><th>GRN ID</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Qty</th><th>Cost</th><th>Actions</th></tr></thead>
-        <tbody id="sgrn-hist"></tbody></table>
+        <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">🗑 se ek line delete karein (jaise koi galat "Grand Total" row) — sirf wahi line reverse hogi, baaki data safe rahega. Bulk delete ke liye neeche checkboxes ya "Select All Matching" use karein.</p>
+        <div style="margin-bottom:9px"><input class="form-input" id="sgrn-hist-search" placeholder="🔍 Search by barcode, name, or GRN ID…" oninput="searchSGRNHist(this.value)"></div>
+        <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="selectAllMatchingGrnLines()">☑️ Select All Matching (all pages)</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearGrnLineSelection()">✕ Clear Selection</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSelectedGrnLines()">🗑️ Delete Selected</button>
+        </div>
+        <div id="sgrn-hist-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:9px"></div>
+        <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th><input type="checkbox" id="sgrn-hist-select-all" onchange="toggleAllGrnLines(this)" title="Select/deselect this page only"></th><th>GRN ID</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Qty</th><th>Cost</th><th>Actions</th></tr></thead>
+        <tbody id="sgrn-hist"></tbody></table></div>
+        <div id="sgrn-hist-pagination"></div>
       </div>
     </div>
   </div>
@@ -476,6 +484,17 @@ body{display:flex;height:100vh;overflow:hidden}
 
   <!-- INVENTORY ALL -->
   <div id="screen-inventory-ho" class="screen">
+    <div class="card" style="background:var(--gray0);border:1px solid var(--amber)">
+      <div class="card-title">🔧 Fix Store Stock (one-time correction)</div>
+      <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">
+        Purani bug ki wajah se stores mein "phantom" stock dikh sakta hai (Product Master ke Qty column se accidentally copy ho gaya tha).
+        Ye tool ek store ka stock **sirf actual received GRNs** se dobara sahi banata hai — sales/returns ko chuata nahi. Zaroorat na ho to na chalayein; safe hai dobara chalana bhi.
+      </p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select class="form-input" id="recalc-store" style="width:220px"></select>
+        <button class="btn btn-primary btn-sm" onclick="recalculateStoreInventory()">🔄 Recalculate This Store's Stock</button>
+      </div>
+    </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
         <div class="card-title" style="margin:0">🗃️ Inventory — All Stores</div>

@@ -219,24 +219,6 @@ async function saveSGRN(){
   if(logRows.length)downloadEventLog(logRows);
   setTimeout(()=>bupHide('sgrn-bup'),2500);
 }
-async function deleteAllGRNAndWarehouse(){
-  // Dry run first — ask the server how many rows this would touch so the
-  // confirm dialog shows real counts, not a guess.
-  const preview=await api('/api/ho/reset-supplier-grn-and-warehouse',{method:'POST'});
-  if(!preview||!preview.ok){toast('❌ '+((preview&&(preview.detail||preview.msg))||'Could not check what would be deleted'),'error');return;}
-  const c=preview.wouldDelete||{supplierGRNRows:0,hoWarehouseRows:0,linkedSupplierTxns:0};
-  if(!c.supplierGRNRows&&!c.hoWarehouseRows){toast('Nothing to delete — Supplier GRN history and HO Warehouse are already empty');return;}
-  const msg=`Delete ALL Supplier GRN history (${c.supplierGRNRows} lines) and ALL HO Warehouse stock (${c.hoWarehouseRows} products)?\n\nThis does NOT touch Products, Send-to-Store history, Transfers, or per-store inventory — only Supplier GRN + HO Warehouse are wiped.\n\nThis cannot be undone. Type-confirm by pressing OK.`;
-  if(!confirm(msg))return;
-  if(!confirm('Are you absolutely sure? This will permanently erase all Supplier GRN and HO Warehouse records.'))return;
-  const res=await api('/api/ho/reset-supplier-grn-and-warehouse?confirm=true',{method:'POST'});
-  if(res&&res.ok){
-    toast(`✅ Deleted — ${res.deleted.supplierGRNRows} GRN lines, ${res.deleted.hoWarehouseRows} warehouse rows`);
-    await loadAll();
-    await fetchAndRenderSGRNHist();
-    renderWarehouse();
-  } else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
-}
 async function deleteSupplierGRN(grnId){
   if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
   const res=await api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
@@ -547,24 +529,25 @@ async function saveProd(){
   } else toast('❌ '+((res&&res.msg)||'Failed'),'error');
 }
 async function downloadProdTemplate(){
-  // Simplified template: only Barcode, Name, Qty are needed to import a
-  // product and set its HO Warehouse (Total Stock) quantity. Everything
-  // else (brand/category/cost/etc.) is optional on the backend and left
-  // out here on purpose so the sheet stays quick to fill — add extra
-  // columns (Brand, Category, Cost, Retail, ...) later only if needed;
-  // the uploader still recognizes them if present.
+  const categories=(DATA.categories&&DATA.categories.length)?DATA.categories:['Running','Casual','Basketball','Training','Kids','Slippers','Other'];
+  const genders=['Men','Women','Kids','Unisex'];
   if(typeof ExcelJS==='undefined'){
-    // Fallback: plain CSV if ExcelJS failed to load (e.g. offline)
-    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty\n8001000000009,ANTA Sample Shoe,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    // Fallback: plain CSV (no dropdowns) if ExcelJS failed to load (e.g. offline)
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Brand,Category,Department,Season,Gender,Size,Color,Cost,Retail,Reorder,Qty\n8001000000009,ANTA Sample Shoe,ANTA,Running,Footwear,SS26,Men,42,White,120,180,5,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
     return;
   }
   const wb=new ExcelJS.Workbook();
   const ws=wb.addWorksheet('Products');
-  const headers=['Barcode','Name','Qty'];
+  const headers=['Barcode','Name','Brand','Category','Department','Season','Gender','Size','Color','Cost','Retail','Reorder','Qty'];
   ws.addRow(headers);
   ws.getRow(1).font={bold:true};
-  ws.addRow(['8001000000009','ANTA Sample Shoe',25]);
-  ws.columns.forEach(c=>c.width=22);
+  ws.addRow(['8001000000009','ANTA Sample Shoe','ANTA','Running','Footwear','SS26','Men','42','White',120,180,5,25]);
+  ws.columns.forEach(c=>c.width=15);
+  const catCol='D',genderCol='G',lastRow=1000;
+  for(let r=2;r<=lastRow;r++){
+    ws.getCell(catCol+r).dataValidation={type:'list',allowBlank:true,formulae:[`"${categories.join(',')}"`]};
+    ws.getCell(genderCol+r).dataValidation={type:'list',allowBlank:true,formulae:[`"${genders.join(',')}"`]};
+  }
   const buf=await wb.xlsx.writeBuffer();
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='products_template.xlsx';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
@@ -745,6 +728,28 @@ async function loadExpenses(){const el=$('exp-ho-table')||$('exp-table');if(!el)
 function rptPreset(){const p=($('rpt-preset')||{}).value||'today',d=today(),now=new Date();if(!$('rpt-from'))return;if(p==='today'){$('rpt-from').value=d;$('rpt-to').value=d;}else if(p==='yesterday'){const y=new Date(now);y.setDate(y.getDate()-1);const yd=y.toISOString().split('T')[0];$('rpt-from').value=yd;$('rpt-to').value=yd;}else if(p==='week'){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());$('rpt-from').value=ws.toISOString().split('T')[0];$('rpt-to').value=d;}else{$('rpt-from').value=d.slice(0,7)+'-01';$('rpt-to').value=d;}}
 async function loadReports(){const qs=new URLSearchParams();if($('rpt-from')?.value)qs.set('from',$('rpt-from').value);if($('rpt-to')?.value)qs.set('to',$('rpt-to').value);if($('rpt-store')?.value&&$('rpt-store').value!=='all')qs.set('store',$('rpt-store').value);const res=await api('/api/reports?'+qs);if(!res||!res.ok){toast('Report failed','error');return;}window.__lastReport=res;if($('rpt-kpis'))$('rpt-kpis').innerHTML=[['Revenue',fmt(res.revenue),''],['Net',fmt(res.net),'blue'],['Invoices',res.invoices,'green'],['ATV',fmt(res.atv),'amber'],['Units',res.units,'purple'],['Cost',fmt(res.totalCost||0),''],['Profit',fmt(res.totalProfit||0),'green'],['Margin',(res.margin||0)+'%','teal'],['Returns',fmt(res.returns),'']].map(([l,v,c])=>`<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');const pm=res.paymentBreakdown||{},rev=res.revenue||0;if($('rpt-pay'))$('rpt-pay').innerHTML=Object.entries(pm).map(([m,v])=>{const pct=rev?Math.round(v/rev*100):0;return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px"><span>${m}</span><span class="fw7">${fmt(v)} (${pct}%)</span></div><div style="background:var(--gray1);border-radius:4px;height:7px"><div style="background:var(--accent2);width:${pct}%;height:100%;border-radius:4px"></div></div></div>`;}).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-prod'))$('rpt-prod').innerHTML=(res.productBreakdown||[]).map(p=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--gray1);font-size:11px"><span class="fw7">${p.name}</span><span>${p.qty} · ${fmt(p.revenue)}</span></div>`).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-txns'))$('rpt-txns').innerHTML=(res.transactions||[]).slice(0,150).map(x=>`<tr><td class="fw7">${x.id}</td><td>${x.date||''}</td><td>${x.time||''}</td><td>${x.store||''}</td><td>${x.customer||''}</td><td style="text-align:center">${x.items||0}</td><td style="text-align:center">${x.units||0}</td><td style="font-size:10px;max-width:220px">${x.productList||''}</td><td>${fmt(x.subtotal||0)}</td><td>${fmt(x.discount||0)}</td><td>${fmt(x.cost||0)}</td><td class="fw7" style="color:var(--green)">${fmt(x.profit||0)}</td><td>${x.margin||0}%</td><td>${x.payment||''}</td><td>${x.payRef||''}</td><td class="fw7">${fmt(x.total||0)}</td></tr>`).join('')||'<tr><td colspan="16" style="text-align:center;color:var(--gray3);padding:14px">None</td></tr>';}
 function exportRpt(){const rows=(window.__lastReport&&window.__lastReport.transactions)||[];const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};const header=['Invoice','Date','Time','Store','Customer','Items','Units','Products','Subtotal','Discount','Cost','Profit','Margin%','Payment','Ref','Total'];const csv=[header.join(',')].concat(rows.map(x=>[x.id,x.date,x.time,x.store,x.customer,x.items,x.units,x.productList,x.subtotal,x.discount,x.cost,x.profit,x.margin,x.payment,x.payRef,x.total].map(esc).join(','))).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='anta_ho_report_'+today()+'.csv';a.click();}
+async function resetAllStores(){
+  if(!confirm('Reset ALL stores\' stock to 0? This clears every store\'s inventory counters (grn/sold/returns/on-hand) in one go — Sales/Returns/Exchange records themselves are NOT deleted, only the stock summary. This cannot be undone. Continue?'))return;
+  if(!confirm('Are you absolutely sure? Type-to-confirm not required, but this affects ALL stores at once.'))return;
+  toast('⏳ Resetting all stores…','info');
+  const res=await api('/api/inventory/reset-all-stores',{method:'POST'});
+  if(res&&res.ok){toast(`✅ Reset done — ${res.deleted} row(s) cleared`);renderInvAll();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Reset failed'),'error');
+}
+async function deleteAllWarehouse(){
+  if(!confirm('Delete ALL HO Warehouse stock rows? Products in Product Master are NOT deleted — only warehouse stock counters. This cannot be undone. Continue?'))return;
+  toast('⏳ Deleting all warehouse stock…','info');
+  const res=await api('/api/ho/warehouse/all',{method:'DELETE'});
+  if(res&&res.ok){toast(`✅ Deleted ${res.deleted} row(s)`);await loadAll();renderWarehouse();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
+async function deleteAllGrnLines(){
+  if(!confirm('Delete ALL Supplier GRN lines? HO Warehouse supplier-in stock resets to 0 for every product (stock already sent to stores is untouched). This cannot be undone. Continue?'))return;
+  toast('⏳ Deleting all GRN lines…','info');
+  const res=await api('/api/ho/supplier-grn-lines/all',{method:'DELETE'});
+  if(res&&res.ok){toast(`✅ Deleted ${res.deleted} line(s)`);selectedGrnLines=new Set();await loadAll();sgrnHistCurrentPage=1;await fetchAndRenderSGRNHist();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
 async function recalculateStoreInventory(){
   const storeId=$('recalc-store')&&$('recalc-store').value;
   if(!storeId){toast('Select a store','error');return;}

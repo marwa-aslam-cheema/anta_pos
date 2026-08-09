@@ -310,3 +310,16 @@ def recalculate_store_inventory(
             updated += 1
     db.commit()
     return {"ok": True, "status": "ok", "updated": updated, "storeId": sid}
+
+
+@router.post("/inventory/reset-all-stores")
+def reset_all_stores(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(require_role("admin"))]):
+    """Zero out EVERY store's inventory in one click (all stores, not HO).
+    This deletes the Inventory rows entirely — next time a store receives
+    a GRN, a fresh row is created. Sale/Return/Exchange transaction
+    records themselves are untouched; this only resets the stock counters.
+    """
+    n = db.query(Inventory).filter(Inventory.store_id != "HO").count()
+    db.query(Inventory).filter(Inventory.store_id != "HO").delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": n}

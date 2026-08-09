@@ -137,6 +137,18 @@ def warehouse(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUs
     return {"ok": True, "status": "ok", "data": out}
 
 
+@router.delete("/warehouse/all")
+def delete_all_warehouse(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Wipe ALL HO Warehouse stock rows (does not touch Product Master —
+    products stay, only their warehouse stock counters are cleared). Use
+    this to clean up after a bad bulk upload before re-importing fresh.
+    """
+    n = db.query(HOWarehouse).count()
+    db.query(HOWarehouse).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": n}
+
+
 @router.get("/supplier-grns")
 def list_supplier_grns(
     db: Annotated[Session, Depends(get_db)],
@@ -236,59 +248,12 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
         store_cols = {}
         total = 0
         for s in stores:
-            # Must default to 0, not p.opening — opening is HO Warehouse's
-            # starting stock, not this store's. Falling back to it here
-            # was the exact same phantom-stock bug reintroduced by this
-            # perf refactor (see inventory.py get_or_create_inv for the
-            # full explanation).
-            oh = inv_by_key.get((p.barcode, s.store_id), 0)
+            oh = inv_by_key.get((p.barcode, s.store_id), int(p.opening or 0))
             store_cols[s.store_id] = oh
             total += oh
         ho = ho_by_barcode.get(p.barcode, 0)
         rows.append({"barcode": p.barcode, "name": p.name, "cost": p.cost or 0, "retail": p.retail or 0, "ho": ho, "stores": store_cols, "total": total + ho})
     return {"ok": True, "status": "ok", "stores": [{"store_id": s.store_id, "name": s.name} for s in stores], "data": rows}
-
-
-@router.post("/reset-supplier-grn-and-warehouse")
-def reset_supplier_grn_and_warehouse(
-    db: Annotated[Session, Depends(get_db)],
-    user: Annotated[CurrentUser, Depends(_admin)],
-    confirm: bool = False,
-):
-    """One-time cleanup: wipes Supplier GRN history and HO Warehouse stock.
-
-    Scope is intentionally narrow — only these two:
-      - SupplierGRN rows (Supplier GRN history)
-      - HOWarehouse rows (HO Warehouse on-hand/supplier_in/store_out)
-      - SupplierTxn rows that were auto-created FROM a supplier GRN (notes
-        starts with "Auto from supplier GRN ") — manual supplier ledger
-        entries (payments, manual invoices) are left untouched.
-
-    Does NOT touch: Products, StoreGRN (Send Stock to Stores) history,
-    Transfers, or per-store Inventory — none of that was asked for.
-    Requires ?confirm=true to actually run (safety against accidental
-    calls); without it, returns counts of what WOULD be deleted.
-    """
-    grn_count = db.query(SupplierGRN).count()
-    wh_count = db.query(HOWarehouse).count()
-    txn_count = db.query(SupplierTxn).filter(SupplierTxn.notes.like("Auto from supplier GRN%")).count()
-
-    if not confirm:
-        return {
-            "ok": True,
-            "dryRun": True,
-            "wouldDelete": {"supplierGRNRows": grn_count, "hoWarehouseRows": wh_count, "linkedSupplierTxns": txn_count},
-            "message": "Nothing deleted — call again with ?confirm=true to actually wipe these.",
-        }
-
-    db.query(SupplierGRN).delete(synchronize_session=False)
-    db.query(HOWarehouse).delete(synchronize_session=False)
-    db.query(SupplierTxn).filter(SupplierTxn.notes.like("Auto from supplier GRN%")).delete(synchronize_session=False)
-    db.commit()
-    return {
-        "ok": True,
-        "deleted": {"supplierGRNRows": grn_count, "hoWarehouseRows": wh_count, "linkedSupplierTxns": txn_count},
-    }
 
 
 GRN_CHUNK_SIZE = 500
@@ -486,7 +451,21 @@ def bulk_delete_supplier_grn_lines(line_ids: list[int], db: Annotated[Session, D
     return {"ok": True, "status": "ok", "deleted": deleted}
 
 
-@router.post("/store-grn")
+@router.delete("/supplier-grn-lines/all")
+def delete_all_supplier_grn_lines(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Delete ALL Supplier GRN lines and reset supplier_in to 0 on every
+    HO Warehouse row (store_out / stock already sent to stores is left
+    untouched). Use this to wipe a bad bulk upload and start fresh.
+    """
+    n = db.query(SupplierGRN).count()
+    db.query(SupplierGRN).delete(synchronize_session=False)
+    db.query(SupplierTxn).filter(SupplierTxn.notes.ilike("Auto from supplier GRN%")).delete(synchronize_session=False)
+    for wh in db.query(HOWarehouse).all():
+        wh.supplier_in = 0
+        wh.recalc()
+        wh.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": n}
 def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
     """Issue stock to a store, processed in memory-bounded chunks (see the
     supplier-grn endpoint above for why), with per-line pass/fail results.
