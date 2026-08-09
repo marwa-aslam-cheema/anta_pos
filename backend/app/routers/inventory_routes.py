@@ -25,39 +25,53 @@ def list_inventory(
     store_id: Optional[str] = None,
     q: Optional[str] = None,
 ):
+    """Store inventory listing (POS 'Inventory' screen).
+
+    Two fixes:
+    1. Old version ran one Inventory query PER active product (up to
+       6,000+ queries on a big catalog) — this is what made the screen
+       hang/come back empty. Now: one query for the store's inventory
+       rows, one for the matching products.
+    2. Only products this store has actually received at least once
+       (grn_in > 0) are shown — a store's inventory screen shouldn't list
+       the entire company-wide catalog with 0 stock for everything it was
+       never sent.
+    """
     sid = store_id or user.store_id
-    products = db.query(Product).filter(Product.active.is_(True)).order_by(Product.name).all()
+    inv_rows = db.query(Inventory).filter(Inventory.store_id == str(sid)).all()
+    received = [r for r in inv_rows if (r.grn_in or 0) > 0]
+    if not received:
+        return {"ok": True, "data": []}
+
+    barcodes = [r.barcode for r in received]
+    products_by_barcode = {
+        p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(barcodes)).all()
+    }
+
     rows = []
-    for p in products:
-        if q and q.lower() not in p.name.lower() and q not in p.barcode:
+    for inv in received:
+        p = products_by_barcode.get(inv.barcode)
+        if not p:
             continue
-        inv = (
-            db.query(Inventory)
-            .filter(Inventory.barcode == p.barcode, Inventory.store_id == sid)
-            .first()
-        )
-        on_hand = int(inv.on_hand) if inv else 0
-        sold = int(inv.sales_out) if inv else 0
-        rets = int(inv.returns_in) if inv else 0
-        claims = int(inv.claims) if inv else 0
-        grn = int(inv.grn_in) if inv else 0
-        status = "OUT" if on_hand <= 0 else ("LOW" if on_hand <= (p.reorder or 5) else "OK")
-        rows.append(
-            {
-                "barcode": p.barcode,
-                "name": p.name,
-                "opening": p.opening or 0,
-                "grnIn": grn,
-                "sold": sold,
-                "returns": rets,
-                "claims": claims,
-                "onHand": on_hand,
-                "reorder": p.reorder or 5,
-                "status": status,
-                "cost": p.cost or 0,
-                "retail": p.retail or 0,
-            }
-        )
+        if q and q.lower() not in (p.name or "").lower() and q not in p.barcode:
+            continue
+        on_hand = int(inv.on_hand or 0)
+        reorder = p.reorder or 5
+        status = "OUT" if on_hand <= 0 else ("LOW" if on_hand <= reorder else "OK")
+        rows.append({
+            "barcode": p.barcode,
+            "name": p.name,
+            "opening": p.opening or 0,
+            "grnIn": int(inv.grn_in or 0),
+            "sold": int(inv.sales_out or 0),
+            "returns": int(inv.returns_in or 0),
+            "claims": int(inv.claims or 0),
+            "onHand": on_hand,
+            "reorder": reorder,
+            "status": status,
+            "cost": p.cost or 0,
+            "retail": p.retail or 0,
+        })
     return {"ok": True, "data": rows}
 
 

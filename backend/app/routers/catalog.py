@@ -99,24 +99,21 @@ def list_products(
 ):
     """List products.
 
-    Two perf fixes here that matter a lot once the catalog has thousands
-    of rows:
-    1. Stock is now computed with ONE query for the whole store instead of
-       a query per product. The old version called get_stock() per row,
-       which for a store login (POS) issued up to 2 queries per product —
-       for 6,687 products that's 13,000+ queries on every catalog sync,
-       every 60 seconds via auto-refresh. That alone could make a big
-       catalog feel like it never finishes loading.
-    2. This no longer validates the result through the ProductOut Pydantic
-       model (FastAPI's response_model does this automatically, and for
-       thousands of rows that validation pass has a real CPU cost on a
-       throttled free-tier instance). Plain dicts with the same shape are
-       returned directly instead.
+    For a STORE login (not HO), this only returns products that store has
+    actually received via a completed GRN (Inventory.grn_in > 0) — a
+    store's POS shouldn't show the entire company-wide catalog, only what
+    it's actually been sent. HO / Product Master (store_id resolves to
+    "HO") is unaffected and still sees everything.
 
-    `limit`/`offset` are optional — omit them to get the full list (used by
-    POS, which needs the whole catalog to scan barcodes locally); pass them
-    to page through the list server-side (used by the HO Product Master
-    screen so it never has to pull all rows at once).
+    Perf notes (matter once the catalog has thousands of rows):
+    1. Stock is computed with ONE query for the whole store instead of a
+       query per product (was up to 2 queries per product = 13,000+ queries
+       on a 6,687-product catalog on every sync).
+    2. Results bypass Pydantic's response_model validation, which has a
+       real CPU cost for thousands of rows on a throttled free instance.
+
+    `limit`/`offset` are optional — omit for the full (store-scoped) list;
+    pass them to page through the list server-side (HO Product Master).
     """
     query = db.query(Product)
     if active_only:
@@ -124,27 +121,29 @@ def list_products(
     if q:
         like = f"%{q}%"
         query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
+
+    sid = store_id or user.store_id
+    is_store_scoped = bool(sid) and sid != "HO"
+
+    stock_by_barcode: dict[str, int] = {}
+    if is_store_scoped:
+        inv_rows = (
+            db.query(Inventory.barcode, Inventory.on_hand, Inventory.grn_in)
+            .filter(Inventory.store_id == str(sid))
+            .all()
+        )
+        stock_by_barcode = {barcode: int(on_hand or 0) for barcode, on_hand, grn_in in inv_rows}
+        received_barcodes = [barcode for barcode, on_hand, grn_in in inv_rows if (grn_in or 0) > 0]
+        query = query.filter(Product.barcode.in_(received_barcodes))
+
     query = query.order_by(Product.name)
     if limit is not None:
         query = query.offset(offset).limit(limit)
     rows = query.all()
 
-    sid = store_id or user.store_id
-    stock_by_barcode: dict[str, int] | None = None
-    if sid and sid != "HO":
-        stock_by_barcode = {
-            barcode: int(on_hand or 0)
-            for barcode, on_hand in db.query(Inventory.barcode, Inventory.on_hand)
-            .filter(Inventory.store_id == str(sid))
-            .all()
-        }
-
     out = []
     for p in rows:
-        if stock_by_barcode is not None:
-            stock = stock_by_barcode.get(p.barcode, int(p.opening or 0))
-        else:
-            stock = None
+        stock = stock_by_barcode.get(p.barcode, 0) if is_store_scoped else None
         out.append({
             "barcode": p.barcode,
             "name": p.name,
