@@ -1,27 +1,30 @@
 """Products, banks, stores CRUD."""
 from __future__ import annotations
-
+ 
 from typing import Annotated, Optional
-
+ 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+ 
 import json
 import re
-
+from datetime import datetime
+ 
 from ..auth import CurrentUser, get_current_user, require_role
 from ..database import get_db
 from ..models import Bank, HOWarehouse, Inventory, Product, Setting, Store
 from ..schemas import BankIn, BankOut, ProductIn, ProductOut, StoreIn, StoreOut
 from ..services.inventory import get_stock, set_ho_warehouse_qty
-
+ 
 router = APIRouter(prefix="/api", tags=["catalog"])
-
+ 
 CATEGORIES_SETTING_KEY = "product_categories"
 DEFAULT_CATEGORIES = ["Running", "Casual", "Basketball", "Training", "Kids", "Slippers", "Other"]
-
-
+ 
+ 
 def _load_categories(db: Session) -> list[str]:
     row = db.query(Setting).filter(Setting.key == CATEGORIES_SETTING_KEY).first()
     if not row or not row.value:
@@ -33,8 +36,8 @@ def _load_categories(db: Session) -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     return list(DEFAULT_CATEGORIES)
-
-
+ 
+ 
 def _save_categories(db: Session, cats: list[str]) -> None:
     row = db.query(Setting).filter(Setting.key == CATEGORIES_SETTING_KEY).first()
     value = json.dumps(cats)
@@ -42,16 +45,16 @@ def _save_categories(db: Session, cats: list[str]) -> None:
         row.value = value
     else:
         db.add(Setting(key=CATEGORIES_SETTING_KEY, value=value))
-
-
+ 
+ 
 @router.get("/categories")
 def list_categories(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ):
     return {"ok": True, "status": "ok", "categories": _load_categories(db)}
-
-
+ 
+ 
 @router.post("/categories")
 def add_category(
     body: dict,
@@ -67,8 +70,8 @@ def add_category(
         _save_categories(db, cats)
         db.commit()
     return {"ok": True, "status": "ok", "categories": cats}
-
-
+ 
+ 
 @router.delete("/categories/{name}")
 def delete_category(
     name: str,
@@ -82,8 +85,8 @@ def delete_category(
     _save_categories(db, cats)
     db.commit()
     return {"ok": True, "status": "ok", "categories": cats}
-
-
+ 
+ 
 @router.get("/products", response_model=list[ProductOut])
 def list_products(
     db: Annotated[Session, Depends(get_db)],
@@ -123,8 +126,8 @@ def list_products(
             )
         )
     return out
-
-
+ 
+ 
 @router.post("/products", response_model=ProductOut)
 def save_product(
     body: ProductIn,
@@ -199,37 +202,90 @@ def save_product(
         opening=row.opening,
         active=row.active,
     )
-
-
+ 
+ 
+PRODUCT_UPSERT_COLS = [
+    "name", "brand", "category", "size", "color", "department",
+    "season", "gender", "cost", "retail", "reorder", "opening", "active",
+]
+ 
+ 
+def _bulk_upsert_products(db: Session, rows: list[dict]) -> None:
+    """Upsert many products in chunked INSERT ... ON CONFLICT statements.
+ 
+    One round trip per chunk of 500 rows instead of one round trip per row —
+    this is what makes imports of thousands of rows fast on a networked
+    (Render/Postgres) database instead of only fast on local SQLite.
+    """
+    if not rows:
+        return
+    insert_fn = pg_insert if db.bind.dialect.name == "postgresql" else sqlite_insert
+    CHUNK = 500
+    for i in range(0, len(rows), CHUNK):
+        chunk = rows[i:i + CHUNK]
+        stmt = insert_fn(Product).values(chunk)
+        set_dict = {c: getattr(stmt.excluded, c) for c in PRODUCT_UPSERT_COLS}
+        set_dict["updated_at"] = datetime.utcnow()
+        stmt = stmt.on_conflict_do_update(index_elements=["barcode"], set_=set_dict)
+        db.execute(stmt)
+ 
+ 
+def _bulk_upsert_ho_qty(db: Session, qty_updates: dict[str, tuple[int, str]]) -> None:
+    """Batched version of set_ho_warehouse_qty for many barcodes at once.
+ 
+    One SELECT ... IN (...) to fetch existing rows, then in-memory updates
+    flushed together — instead of one SELECT + SAVEPOINT per barcode.
+    """
+    if not qty_updates:
+        return
+    barcodes = list(qty_updates.keys())
+    existing_wh = {
+        w.barcode: w
+        for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()
+    }
+    for bc, (qty, name) in qty_updates.items():
+        row = existing_wh.get(bc)
+        if not row:
+            row = HOWarehouse(barcode=bc, name=name or "", supplier_in=0, store_out=0, on_hand=0)
+            db.add(row)
+        row.supplier_in = int(qty or 0) + (row.store_out or 0)
+        row.recalc()
+        if name:
+            row.name = name
+ 
+ 
 @router.post("/products/bulk")
 def bulk_save_products(
     body: list[dict],
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[CurrentUser, Depends(require_role("admin", "manager"))],
 ):
-    """Upsert many products, row by row, so ONE bad row never costs the rest.
-
-    Each row is validated and committed on its own using a SAVEPOINT
-    (db.begin_nested). If a row fails — bad value, duplicate barcode,
-    DB constraint, anything — only that row's savepoint is rolled back;
-    every other row in the same request still gets saved. This is what
-    makes a 1000+ row bulk upload safe: a handful of bad rows can no
-    longer silently wipe out an entire batch of otherwise-good data.
-
+    """Upsert many products fast, while still isolating bad rows.
+ 
+    Every row is validated in pure Python first (no DB touched), so a bad
+    row is reported and skipped without affecting any other row — same
+    safety guarantee as before. Valid rows are then written in chunked
+    INSERT ... ON CONFLICT statements (see _bulk_upsert_products) instead
+    of one SAVEPOINT + flush + commit per row, which is what made large
+    imports slow on a networked database.
+ 
     Returns per-row results (`results`) in the same order as the input,
     so the caller can build a full pass/fail event log — not just totals.
     """
     raw_barcodes = [str((r or {}).get("barcode", "")).strip() for r in body]
-    existing = {
-        p.barcode: p
-        for p in db.query(Product).filter(Product.barcode.in_([b for b in raw_barcodes if b])).all()
+    existing_barcodes: set[str] = {
+        b for (b,) in db.query(Product.barcode)
+        .filter(Product.barcode.in_([b for b in raw_barcodes if b]))
+        .all()
     }
+ 
     created = 0
     updated = 0
     errors: list[str] = []
     results: list[dict] = []
+    valid_rows: list[dict] = []
     qty_updates: dict[str, tuple[int, str]] = {}
-
+ 
     for raw in body:
         bc_for_error = str((raw or {}).get("barcode", "?")).strip() or "?"
         name_for_error = str((raw or {}).get("name", "")).strip()
@@ -256,45 +312,15 @@ def bulk_save_products(
             errors.append(msg)
             results.append({"barcode": bc_for_error, "name": name_for_error, "status": "failed", "reason": "missing barcode or name"})
             continue
-
-        # Each row gets its own savepoint so a failure here can't drag
-        # down any of the other rows already staged in this request.
-        savepoint = db.begin_nested()
-        try:
-            row = existing.get(item.barcode)
-            is_update = row is not None
-            if row:
-                row.name = item.name
-                row.brand = item.brand
-                row.category = item.category
-                row.size = item.size
-                row.color = item.color
-                row.department = item.department
-                row.season = item.season
-                row.gender = item.gender
-                row.cost = item.cost
-                row.retail = item.retail
-                row.reorder = item.reorder
-                row.opening = item.opening
-                row.active = item.active
-            else:
-                row = Product(
-                    barcode=item.barcode, name=item.name, brand=item.brand, category=item.category,
-                    size=item.size, color=item.color, department=item.department, season=item.season,
-                    gender=item.gender, cost=item.cost, retail=item.retail, reorder=item.reorder,
-                    opening=item.opening, active=item.active,
-                )
-                db.add(row)
-            db.flush()
-            savepoint.commit()
-        except Exception as e:  # noqa: BLE001 — IntegrityError etc, scoped to this row only
-            savepoint.rollback()
-            msg = f"{item.barcode}: {e}"
-            errors.append(msg)
-            results.append({"barcode": item.barcode, "name": item.name, "status": "failed", "reason": str(e)})
-            continue
-
-        existing[item.barcode] = row
+ 
+        is_update = item.barcode in existing_barcodes
+        valid_rows.append({
+            "barcode": item.barcode, "name": item.name, "brand": item.brand, "category": item.category,
+            "size": item.size, "color": item.color, "department": item.department, "season": item.season,
+            "gender": item.gender, "cost": item.cost, "retail": item.retail, "reorder": item.reorder,
+            "opening": item.opening, "active": item.active,
+        })
+        existing_barcodes.add(item.barcode)  # dedupe within the same batch
         if is_update:
             updated += 1
             results.append({"barcode": item.barcode, "name": item.name, "status": "updated", "reason": ""})
@@ -303,26 +329,24 @@ def bulk_save_products(
             results.append({"barcode": item.barcode, "name": item.name, "status": "created", "reason": ""})
         if item.qty is not None:
             qty_updates[item.barcode] = (item.qty, item.name)
-
-    db.commit()
-
-    # Warehouse quantity sync also gets its own per-row savepoint — a bad
-    # quantity on one barcode must not undo the product rows above, which
-    # are already safely committed by this point.
-    for bc, (qty, name) in qty_updates.items():
-        savepoint = db.begin_nested()
-        try:
-            set_ho_warehouse_qty(db, bc, name, qty)
-            savepoint.commit()
-        except Exception as e:  # noqa: BLE001
-            savepoint.rollback()
-            errors.append(f"{bc}: stock qty not updated — {e}")
-    if qty_updates:
+ 
+    try:
+        _bulk_upsert_products(db, valid_rows)
         db.commit()
-
+    except Exception as e:  # noqa: BLE001 — a DB-level failure here is real, surface it
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Bulk product write failed: {e}")
+ 
+    try:
+        _bulk_upsert_ho_qty(db, qty_updates)
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        errors.append(f"Stock quantities not fully updated — {e}")
+ 
     return {"ok": True, "status": "ok", "created": created, "updated": updated, "errors": errors, "results": results}
-
-
+ 
+ 
 @router.delete("/products/{barcode}")
 def delete_product(
     barcode: str,
@@ -335,8 +359,8 @@ def delete_product(
     db.delete(row)
     db.commit()
     return {"ok": True, "status": "ok"}
-
-
+ 
+ 
 @router.post("/products/bulk-delete")
 def bulk_delete_products(
     barcodes: list[str],
@@ -346,8 +370,8 @@ def bulk_delete_products(
     n = db.query(Product).filter(Product.barcode.in_(barcodes)).delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "status": "ok", "deleted": n}
-
-
+ 
+ 
 @router.get("/banks", response_model=list[BankOut])
 def list_banks(
     db: Annotated[Session, Depends(get_db)],
@@ -365,8 +389,8 @@ def list_banks(
         )
         for b in rows
     ]
-
-
+ 
+ 
 @router.post("/banks", response_model=BankOut)
 def save_bank(
     body: BankIn,
@@ -401,8 +425,8 @@ def save_bank(
         active=row.active,
         icon=row.icon or "💳",
     )
-
-
+ 
+ 
 @router.get("/stores/all", response_model=list[StoreOut])
 def all_stores(
     db: Annotated[Session, Depends(get_db)],
@@ -421,8 +445,8 @@ def all_stores(
         )
         for r in rows
     ]
-
-
+ 
+ 
 @router.post("/stores", response_model=StoreOut)
 def save_store(
     body: StoreIn,
@@ -459,3 +483,4 @@ def save_store(
         phone=row.phone or "",
         active=row.active,
     )
+ 
