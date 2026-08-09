@@ -301,6 +301,30 @@ function toggleProduct(bc){
   if(selectedProducts.has(bc)) selectedProducts.delete(bc); else selectedProducts.add(bc);
   renderProductsTable();
 }
+async function selectAllMatchingProducts(){
+  // Selects every product matching the current search — across ALL
+  // pages, not just what's currently on screen. Fetches barcodes only
+  // once, on demand, rather than keeping the full catalog loaded at all
+  // times (that was the slow part). Fine as an occasional deliberate
+  // action; just not something we do automatically on every page load.
+  if(!prodTotalCount){toast('No products to select','warn');return;}
+  if(prodTotalCount>3000&&!confirm(`Select all ${prodTotalCount} matching product(s)? This fetches the full matching list once — may take a few seconds for very large catalogs.`))return;
+  toast('⏳ Selecting all matching products…','info');
+  const qs=new URLSearchParams({active_only:'false',limit:String(prodTotalCount)});
+  if(prodSearchQuery)qs.set('q',prodSearchQuery);
+  const rows=await api('/api/products?'+qs.toString());
+  if(Array.isArray(rows)){
+    rows.forEach(p=>selectedProducts.add(p.barcode));
+    renderProductsTable();
+    toast(`✅ ${selectedProducts.size} product(s) selected`);
+  } else {
+    toast('❌ Failed to select all — try again','error');
+  }
+}
+function clearProductSelection(){
+  selectedProducts=new Set();
+  renderProductsTable();
+}
 async function deleteSelectedProducts(){
   if(!selectedProducts.size){toast('No products selected','error');return;}
   if(!confirm('Delete '+selectedProducts.size+' selected product(s)? This cannot be undone.'))return;

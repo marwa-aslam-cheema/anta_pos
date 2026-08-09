@@ -171,6 +171,19 @@ body{display:flex;height:100vh;overflow:hidden}
             <div style="font-size:12px;color:var(--gray4)">Lines: <strong id="sgrn-n">0</strong></div>
             <div style="font-size:13px;font-weight:800;color:var(--navy)">Total: <span id="sgrn-total">LYD 0.00</span></div>
           </div>
+          <div id="sgrn-bup-panel" style="display:none;border:1px solid var(--gray1);border-radius:10px;padding:11px 13px;margin-bottom:11px;background:var(--gray0)">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:6px">
+              <span id="sgrn-bup-status">Saving…</span>
+              <span id="sgrn-bup-count">0 / 0</span>
+            </div>
+            <div style="background:var(--gray1);border-radius:6px;height:10px;overflow:hidden">
+              <div id="sgrn-bup-bar" style="background:var(--accent2);width:0%;height:100%;border-radius:6px;transition:width .2s"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray4);margin-top:5px">
+              <span id="sgrn-bup-elapsed">Elapsed: 0s</span>
+              <span id="sgrn-bup-eta">Estimated remaining: —</span>
+            </div>
+          </div>
           <div style="display:flex;gap:7px;margin-top:11px">
             <button class="btn btn-green btn-full" onclick="saveSGRN()">✅ Save GRN to HO Warehouse</button>
             <button class="btn btn-ghost" onclick="clearSGRN()">🗑 Clear</button>
@@ -190,7 +203,8 @@ body{display:flex;height:100vh;overflow:hidden}
       </div>
       <div class="card">
         <div class="card-title">📋 Supplier GRN History</div>
-        <table><thead><tr><th>GRN ID</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Qty</th><th>Cost</th></tr></thead>
+        <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">Mistake ho jaye to 🗑 se GRN delete karein — stock automatically reverse ho jayega, phir sahi file dobara upload karein.</p>
+        <table><thead><tr><th>GRN ID</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Qty</th><th>Cost</th><th>Actions</th></tr></thead>
         <tbody id="sgrn-hist"></tbody></table>
       </div>
     </div>
@@ -218,6 +232,19 @@ body{display:flex;height:100vh;overflow:hidden}
             <div style="font-size:12px;color:var(--gray4)">Lines: <strong id="stgrn-n">0</strong></div>
             <div style="font-size:13px;font-weight:800;color:var(--navy)">Total Qty: <span id="stgrn-total">0</span></div>
           </div>
+          <div id="stgrn-bup-panel" style="display:none;border:1px solid var(--gray1);border-radius:10px;padding:11px 13px;margin-bottom:11px;background:var(--gray0)">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:6px">
+              <span id="stgrn-bup-status">Issuing…</span>
+              <span id="stgrn-bup-count">0 / 0</span>
+            </div>
+            <div style="background:var(--gray1);border-radius:6px;height:10px;overflow:hidden">
+              <div id="stgrn-bup-bar" style="background:var(--accent2);width:0%;height:100%;border-radius:6px;transition:width .2s"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray4);margin-top:5px">
+              <span id="stgrn-bup-elapsed">Elapsed: 0s</span>
+              <span id="stgrn-bup-eta">Estimated remaining: —</span>
+            </div>
+          </div>
           <div style="display:flex;gap:7px;margin-top:11px">
             <button class="btn btn-primary btn-full" onclick="issueStoreGRN()">🚚 Issue to Store</button>
             <button class="btn btn-ghost" onclick="clearStGRN()">🗑 Clear</button>
@@ -237,7 +264,8 @@ body{display:flex;height:100vh;overflow:hidden}
       <div>
         <div class="card">
           <div class="card-title">📋 Pending GRNs (not received)</div>
-          <table><thead><tr><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Issued</th><th>Received</th><th>Status</th></tr></thead>
+          <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">Mistake ho jaye aur store ne abhi receive na kiya ho to 🗑 se delete karein — stock automatically reverse ho jayega.</p>
+          <table><thead><tr><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Issued</th><th>Received</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="stgrn-pending"></tbody></table>
         </div>
         <div class="card">
@@ -317,7 +345,11 @@ body{display:flex;height:100vh;overflow:hidden}
           <option value="200">200</option>
         </select>
       </div>
-      <div id="prod-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:13px"></div>
+      <div id="prod-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:6px"></div>
+      <div style="display:flex;gap:8px;margin-bottom:13px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="selectAllMatchingProducts()">☑️ Select All Matching (all pages)</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearProductSelection()">✕ Clear Selection</button>
+      </div>
       <div id="bulk-upload-progress" style="display:none;border:1px solid var(--gray1);border-radius:10px;padding:11px 13px;margin-bottom:13px;background:var(--gray0)">
         <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:6px">
           <span id="bup-status">Uploading…</span>
@@ -355,7 +387,7 @@ body{display:flex;height:100vh;overflow:hidden}
           </div>
         </div>
       </div>
-      <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th><input type="checkbox" id="prod-select-all" onchange="toggleAllProducts(this)"></th><th>Barcode</th><th>Qty</th><th>Unit Cost</th><th>Current Price</th><th>Name</th><th>Brand</th><th>Category</th><th>Department</th><th>Season</th><th>Gender</th><th>Size</th><th>Color</th><th>Margin%</th><th>Reorder</th><th>Active</th><th>Actions</th></tr></thead>
+      <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th><input type="checkbox" id="prod-select-all" onchange="toggleAllProducts(this)" title="Select/deselect this page only — use 'Select All Matching' above for everything"></th><th>Barcode</th><th>Qty</th><th>Unit Cost</th><th>Current Price</th><th>Name</th><th>Brand</th><th>Category</th><th>Department</th><th>Season</th><th>Gender</th><th>Size</th><th>Color</th><th>Margin%</th><th>Reorder</th><th>Active</th><th>Actions</th></tr></thead>
       <tbody id="prod-table"></tbody></table></div>
       <div id="prod-pagination"></div>
     </div>

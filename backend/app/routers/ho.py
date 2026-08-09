@@ -118,14 +118,22 @@ class CFIn(BaseModel):
 
 @router.get("/warehouse")
 def warehouse(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """HO Warehouse stock listing. Brand is looked up with ONE query for
+    all barcodes instead of one query per row — the old version issued a
+    Product query per HOWarehouse row (thousands of queries on a big
+    catalog), and this endpoint is part of the main dashboard load that
+    runs on every login and every 90s auto-refresh.
+    """
     rows = db.query(HOWarehouse).order_by(HOWarehouse.name).all()
-    out = []
-    for r in rows:
-        p = db.query(Product).filter(Product.barcode == r.barcode).first()
-        out.append({
-            "Barcode": r.barcode, "Name": r.name, "Brand": (p.brand if p else "ANTA"),
-            "Supplier_In": r.supplier_in, "Store_Out": r.store_out, "OnHand": r.on_hand,
-        })
+    barcodes = [r.barcode for r in rows]
+    brand_by_barcode = {
+        b: (brand or "ANTA")
+        for b, brand in db.query(Product.barcode, Product.brand).filter(Product.barcode.in_(barcodes)).all()
+    } if barcodes else {}
+    out = [{
+        "Barcode": r.barcode, "Name": r.name, "Brand": brand_by_barcode.get(r.barcode, "ANTA"),
+        "Supplier_In": r.supplier_in, "Store_Out": r.store_out, "OnHand": r.on_hand,
+    } for r in rows]
     return {"ok": True, "status": "ok", "data": out}
 
 
@@ -167,21 +175,37 @@ def list_transfers(db: Annotated[Session, Depends(get_db)], user: Annotated[Curr
 
 @router.get("/inventory-all")
 def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)], q: Optional[str] = None):
-    products = db.query(Product).filter(Product.active.is_(True)).all()
+    """All-store inventory grid. Old version ran a query per (product x
+    store) pair — for 6,687 products x 3 stores that's 20,000+ queries,
+    plus one more per product for HO Warehouse. Now: one query for
+    products, one for stores, one for ALL inventory rows, one for ALL
+    warehouse rows — 4 total, regardless of catalog size.
+    """
+    query = db.query(Product).filter(Product.active.is_(True))
+    if q:
+        like = f"%{q}%"
+        query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
+    products = query.all()
     stores = db.query(Store).filter(Store.store_id != "HO", Store.active.is_(True)).all()
+
+    inv_by_key: dict[tuple, int] = {
+        (barcode, store_id): int(on_hand or 0)
+        for barcode, store_id, on_hand in db.query(Inventory.barcode, Inventory.store_id, Inventory.on_hand).all()
+    }
+    ho_by_barcode: dict[str, int] = {
+        barcode: int(on_hand or 0)
+        for barcode, on_hand in db.query(HOWarehouse.barcode, HOWarehouse.on_hand).all()
+    }
+
     rows = []
     for p in products:
-        if q and q.lower() not in (p.name or "").lower() and q not in p.barcode:
-            continue
         store_cols = {}
         total = 0
         for s in stores:
-            inv = db.query(Inventory).filter(Inventory.barcode == p.barcode, Inventory.store_id == s.store_id).first()
-            oh = int(inv.on_hand) if inv else int(p.opening or 0)
+            oh = inv_by_key.get((p.barcode, s.store_id), int(p.opening or 0))
             store_cols[s.store_id] = oh
             total += oh
-        wh = db.query(HOWarehouse).filter(HOWarehouse.barcode == p.barcode).first()
-        ho = int(wh.on_hand) if wh else 0
+        ho = ho_by_barcode.get(p.barcode, 0)
         rows.append({"barcode": p.barcode, "name": p.name, "cost": p.cost or 0, "retail": p.retail or 0, "ho": ho, "stores": store_cols, "total": total + ho})
     return {"ok": True, "status": "ok", "stores": [{"store_id": s.store_id, "name": s.name} for s in stores], "data": rows}
 
