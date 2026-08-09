@@ -231,28 +231,33 @@ def _bulk_upsert_products(db: Session, rows: list[dict]) -> None:
  
  
 def _bulk_upsert_ho_qty(db: Session, qty_updates: dict[str, tuple[int, str]]) -> None:
-    """Batched version of set_ho_warehouse_qty for many barcodes at once.
- 
-    One SELECT ... IN (...) to fetch existing rows, then in-memory updates
-    flushed together — instead of one SELECT + SAVEPOINT per barcode.
+    """Batched version of set_ho_warehouse_qty for many barcodes at once,
+    processed in memory-bounded chunks of 500 (commit + expunge_all per
+    chunk) so a large product import can't hold thousands of HOWarehouse
+    ORM objects in RAM at once — that's what crashes a 512MB instance.
     """
     if not qty_updates:
         return
-    barcodes = list(qty_updates.keys())
-    existing_wh = {
-        w.barcode: w
-        for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()
-    }
-    for bc, (qty, name) in qty_updates.items():
-        row = existing_wh.get(bc)
-        if not row:
-            row = HOWarehouse(barcode=bc, name=name or "", supplier_in=0, store_out=0, on_hand=0)
-            db.add(row)
-        row.supplier_in = int(qty or 0) + (row.store_out or 0)
-        row.recalc()
-        if name:
-            row.name = name
- 
+    items = list(qty_updates.items())
+    CHUNK = 500
+    for i in range(0, len(items), CHUNK):
+        chunk = items[i:i + CHUNK]
+        barcodes = [bc for bc, _ in chunk]
+        existing_wh = {
+            w.barcode: w
+            for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()
+        }
+        for bc, (qty, name) in chunk:
+            row = existing_wh.get(bc)
+            if not row:
+                row = HOWarehouse(barcode=bc, name=name or "", supplier_in=0, store_out=0, on_hand=0)
+                db.add(row)
+            row.supplier_in = int(qty or 0) + (row.store_out or 0)
+            row.recalc()
+            if name:
+                row.name = name
+        db.commit()
+        db.expunge_all()
  
 @router.post("/products/bulk")
 def bulk_save_products(
@@ -483,4 +488,3 @@ def save_store(
         phone=row.phone or "",
         active=row.active,
     )
- 

@@ -186,64 +186,81 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
     return {"ok": True, "status": "ok", "stores": [{"store_id": s.store_id, "name": s.name} for s in stores], "data": rows}
 
 
+GRN_CHUNK_SIZE = 500
+
+
 @router.post("/supplier-grn")
 def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
-    """Save a Supplier GRN. Batched so large files (thousands of lines) don't
-    time out: the old version ran 2 SELECT queries per line (HO Warehouse +
-    Product lookups) — for 6,730 lines that's 13,000+ round trips before a
-    single row was even saved. This fetches everything needed in 2 queries
-    total, then applies all the changes in memory before one commit.
+    """Save a Supplier GRN, processed in memory-bounded chunks.
+
+    The previous version prefetched ALL matching Product + HOWarehouse rows
+    up front and kept every new SupplierGRN/Product/HOWarehouse object alive
+    in the session until one final commit — for 6,730 lines that's roughly
+    3 x 6,730 live ORM objects held in RAM simultaneously, which is what
+    blew past Render's 512MB limit and crashed the instance.
+
+    This version handles GRN_CHUNK_SIZE (500) lines at a time: fetch only
+    what that chunk needs, commit the chunk, then `expunge_all()` to let
+    Python free that chunk's objects before moving to the next one. Peak
+    memory stays roughly constant no matter how large the file is.
     """
     grn_id = body.grnId or f"SGRN-{int(time.time())}"
     date = body.date or today_str()
-
     lines = [l for l in body.lines if l.barcode and l.qty]
-    barcodes = list({l.barcode for l in lines})
-
-    existing_products = (
-        {p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(barcodes)).all()}
-        if barcodes else {}
-    )
-    existing_wh = (
-        {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
-        if barcodes else {}
-    )
 
     count = 0
     total_cost = 0.0
-    seen_new_barcodes = set()
 
-    for line in lines:
-        tc = (line.qty or 0) * (line.cost or 0)
-        total_cost += tc
-        db.add(SupplierGRN(
-            grn_id=grn_id, date=date, supplier=body.supplier or "", invoice_no=body.invoiceNo or "",
-            barcode=line.barcode, name=line.name or "", qty=line.qty or 0, unit_cost=line.cost or 0,
-            total_cost=tc, notes=body.notes or "",
-        ))
+    for i in range(0, len(lines), GRN_CHUNK_SIZE):
+        chunk = lines[i:i + GRN_CHUNK_SIZE]
+        chunk_barcodes = list({l.barcode for l in chunk})
 
-        wh = existing_wh.get(line.barcode)
-        if wh:
-            wh.supplier_in = (wh.supplier_in or 0) + int(line.qty or 0)
-            wh.recalc()
-            wh.updated_at = datetime.utcnow()
-            if line.name:
-                wh.name = line.name
-        else:
-            wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=int(line.qty or 0), store_out=0)
-            wh.recalc()
-            db.add(wh)
-            existing_wh[line.barcode] = wh
+        existing_products = {
+            p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(chunk_barcodes)).all()
+        }
+        existing_wh = {
+            w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(chunk_barcodes)).all()
+        }
+        seen_new_barcodes = set()
 
-        prod = existing_products.get(line.barcode)
-        if not prod and line.barcode not in seen_new_barcodes:
-            prod = Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True)
-            db.add(prod)
-            existing_products[line.barcode] = prod
-            seen_new_barcodes.add(line.barcode)
-        elif prod and line.cost and (not prod.cost or prod.cost == 0):
-            prod.cost = line.cost
-        count += 1
+        for line in chunk:
+            tc = (line.qty or 0) * (line.cost or 0)
+            total_cost += tc
+            db.add(SupplierGRN(
+                grn_id=grn_id, date=date, supplier=body.supplier or "", invoice_no=body.invoiceNo or "",
+                barcode=line.barcode, name=line.name or "", qty=line.qty or 0, unit_cost=line.cost or 0,
+                total_cost=tc, notes=body.notes or "",
+            ))
+
+            wh = existing_wh.get(line.barcode)
+            if wh:
+                wh.supplier_in = (wh.supplier_in or 0) + int(line.qty or 0)
+                wh.recalc()
+                wh.updated_at = datetime.utcnow()
+                if line.name:
+                    wh.name = line.name
+            else:
+                wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=int(line.qty or 0), store_out=0)
+                wh.recalc()
+                db.add(wh)
+                existing_wh[line.barcode] = wh
+
+            prod = existing_products.get(line.barcode)
+            if not prod and line.barcode not in seen_new_barcodes:
+                prod = Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True)
+                db.add(prod)
+                existing_products[line.barcode] = prod
+                seen_new_barcodes.add(line.barcode)
+            elif prod and line.cost and (not prod.cost or prod.cost == 0):
+                prod.cost = line.cost
+            count += 1
+
+        try:
+            db.commit()
+        except IntegrityError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"GRN save failed — duplicate or invalid barcode in the file: {e.orig}")
+        db.expunge_all()  # release this chunk's objects so memory doesn't accumulate
 
     if body.supplier and total_cost > 0:
         sup = db.query(Supplier).filter(Supplier.name == body.supplier).first()
@@ -257,56 +274,57 @@ def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: An
             date=date, type="invoice", amount=total_cost, reference=body.invoiceNo or grn_id,
             notes=f"Auto from supplier GRN {grn_id}",
         ))
-    try:
         db.commit()
-    except IntegrityError as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"GRN save failed — duplicate or invalid barcode in the file: {e.orig}")
+
     return {"ok": True, "status": "ok", "count": count, "grnId": grn_id}
 
 
 @router.post("/store-grn")
 def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
-    """Issue stock to a store. Batched the same way as Supplier GRN above —
-    one prefetch query for HO Warehouse stock instead of a query per line,
-    so large files don't time out.
+    """Issue stock to a store, processed in memory-bounded chunks (see the
+    supplier-grn endpoint above for why: holding thousands of ORM objects
+    in RAM at once is what crashes a 512MB Render instance).
     """
     grn_id = body.grnId or f"GRN-{int(time.time())}"
     date = body.date or today_str()
     count = 0
     errors = []
-
     lines = [l for l in body.lines if l.barcode and l.qty]
-    barcodes = list({l.barcode for l in lines})
-    existing_wh = (
-        {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
-        if barcodes else {}
-    )
 
-    for line in lines:
-        wh = existing_wh.get(line.barcode)
-        ho_stock = int(wh.on_hand) if wh else 0
-        if wh is not None and ho_stock < (line.qty or 0):
-            errors.append(f"{line.barcode} insufficient HO ({ho_stock})")
-            continue
-        db.add(StoreGRN(
-            grn_id=grn_id, date=date, store_id=body.storeId, store_name=body.storeName,
-            barcode=line.barcode, name=line.name or "", qty_issued=line.qty or 0, qty_received=0,
-            status="pending", notes=body.notes or "",
-        ))
-        if wh:
-            wh.store_out = (wh.store_out or 0) + int(line.qty or 0)
-            wh.recalc()
-            wh.updated_at = datetime.utcnow()
-            if line.name:
-                wh.name = line.name
-        else:
-            wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=0, store_out=int(line.qty or 0))
-            wh.recalc()
-            db.add(wh)
-            existing_wh[line.barcode] = wh
-        count += 1
-    db.commit()
+    for i in range(0, len(lines), GRN_CHUNK_SIZE):
+        chunk = lines[i:i + GRN_CHUNK_SIZE]
+        chunk_barcodes = list({l.barcode for l in chunk})
+        existing_wh = {
+            w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(chunk_barcodes)).all()
+        }
+
+        for line in chunk:
+            wh = existing_wh.get(line.barcode)
+            ho_stock = int(wh.on_hand) if wh else 0
+            if wh is not None and ho_stock < (line.qty or 0):
+                errors.append(f"{line.barcode} insufficient HO ({ho_stock})")
+                continue
+            db.add(StoreGRN(
+                grn_id=grn_id, date=date, store_id=body.storeId, store_name=body.storeName,
+                barcode=line.barcode, name=line.name or "", qty_issued=line.qty or 0, qty_received=0,
+                status="pending", notes=body.notes or "",
+            ))
+            if wh:
+                wh.store_out = (wh.store_out or 0) + int(line.qty or 0)
+                wh.recalc()
+                wh.updated_at = datetime.utcnow()
+                if line.name:
+                    wh.name = line.name
+            else:
+                wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=0, store_out=int(line.qty or 0))
+                wh.recalc()
+                db.add(wh)
+                existing_wh[line.barcode] = wh
+            count += 1
+
+        db.commit()
+        db.expunge_all()  # release this chunk's objects so memory doesn't accumulate
+
     return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "errors": errors}
 
 
