@@ -15,7 +15,19 @@ const $=id=>document.getElementById(id);
 const today=()=>new Date().toISOString().split('T')[0];
 const fmt=n=>'LYD '+(+n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 function toast(msg,type='ok'){const t=$('toast');if(!t)return;t.textContent=msg;t.style.background=type==='error'?'var(--red)':type==='warn'?'#856404':type==='info'?'var(--accent2)':'var(--navy)';t.style.display='block';setTimeout(()=>t.style.display='none',3000);}
-function setSyncStatus(state,label){[$('sync-dot'),$('top-dot')].forEach(d=>{if(d)d.className='dot '+state;});const l=$('sync-lbl');if(l)l.textContent=state==='online'?'🟢 Connected':state==='syncing'?'🔄 Loading':'🔴 Offline';const tl=$('top-lbl');if(tl)tl.textContent=state==='online'?'Online':state==='syncing'?'Loading':'Offline';const sl=$('sync-last');if(sl&&label)sl.textContent=label;isOnline=state==='online';}
+let _hoLoadTimer=null,_hoLoadStart=0;
+function _hoTickLoadLabel(){
+  const secs=Math.floor((Date.now()-_hoLoadStart)/1000);
+  const hint=secs>=8?' — server waking up, first load can take up to ~60s':'';
+  const l=$('sync-lbl');if(l)l.textContent='🔄 Loading ('+secs+'s)'+hint;
+  const tl=$('top-lbl');if(tl)tl.textContent='Loading ('+secs+'s)'+hint;
+}
+function setSyncStatus(state,label){[$('sync-dot'),$('top-dot')].forEach(d=>{if(d)d.className='dot '+state;});
+  if(state==='syncing'){
+    if(!_hoLoadTimer){_hoLoadStart=Date.now();_hoTickLoadLabel();_hoLoadTimer=setInterval(_hoTickLoadLabel,1000);}
+  }else if(_hoLoadTimer){clearInterval(_hoLoadTimer);_hoLoadTimer=null;}
+  if(state!=='syncing'){const l=$('sync-lbl');if(l)l.textContent=state==='online'?'🟢 Connected':'🔴 Offline';const tl=$('top-lbl');if(tl)tl.textContent=state==='online'?'Online':'Offline';}
+  const sl=$('sync-last');if(sl&&label)sl.textContent=label;isOnline=state==='online';}
 let _hoAutoRefreshTimer=null,_hoAutoRefreshing=false;
 function startHoAutoRefresh(){
   // Background refresh every 90s on top of the manual 🔄 Refresh button.
@@ -40,6 +52,7 @@ async function pinSubmit(){
   }
   const storeId=($('login-store')&&$('login-store').value)||'HO';
   const e=$('login-error'); if(e){e.style.display='none';e.textContent='';}
+  setSyncStatus('syncing','Signing in...');
   const res=await api('/api/auth/login',{method:'POST',body:{store_id:storeId,pin:pinEntry}});
   const token=res&&(res.access_token||res.accessToken);
   const user=res&&res.user;
@@ -97,7 +110,7 @@ try{const [dash,sales,prods,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,sup
 ()=>api('/api/ho/warehouse'),()=>api('/api/ho/supplier-grns'),()=>api('/api/ho/store-grns'),()=>api('/api/ho/transfers'),()=>api('/api/ho/suppliers'),()=>api('/api/ho/supplier-txns'),()=>api('/api/ho/capital'),()=>api('/api/ho/bs-entries'),()=>api('/api/ho/cf-items')],4);
 if(dash&&dash.ok)DATA.dashboard=dash;
 if(sales&&sales.data)DATA.sales=sales.data.map(s=>({...s,Date:s.date,Total:s.total,Payment:s.payment,Store:s.store,StoreID:s.storeId}));
-if(Array.isArray(prods))DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
+if(Array.isArray(prods))DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
 if(Array.isArray(banks))DATA.banks=banks.map(b=>({BankID:b.bank_id,Name:b.name,Device:b.device,Active:b.active?'Y':'N'}));
 const storeRows=Array.isArray(stores)?stores:(stores&&Array.isArray(stores.data)?stores.data:[]);if(storeRows.length||Array.isArray(stores)||(stores&&stores.data))DATA.stores=storeRows.map(s=>({StoreID:s.store_id||s.StoreID,Name:s.name||s.Name,City:s.city||s.City||'',Address:s.address||s.Address||'',Manager:s.manager||s.Manager||'',Phone:s.phone||s.Phone||'',Active:(s.active===false||s.Active==='N')?'N':'Y'}));
 if(Array.isArray(users))DATA.users=users.map(u=>({UserID:u.user_id,StoreID:u.store_id,StoreName:u.store_name,Name:u.name,Role:u.role,Active:u.active?'Y':'N'}));
