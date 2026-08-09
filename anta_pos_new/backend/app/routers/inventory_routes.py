@@ -1,0 +1,250 @@
+"""Inventory, GRN, warehouse routes."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from ..auth import CurrentUser, get_current_user, require_role
+from ..database import get_db
+from ..models import HOWarehouse, Inventory, Product, StoreGRN, SupplierGRN
+from ..schemas import GRNIssueIn, GRNReceiveIn, SupplierGRNIn
+from ..services.inventory import get_or_create_inv, get_stock, update_ho_warehouse, update_inv
+from ..utils import today_str
+
+router = APIRouter(prefix="/api", tags=["inventory"])
+
+
+@router.get("/inventory")
+def list_inventory(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    store_id: Optional[str] = None,
+    q: Optional[str] = None,
+):
+    sid = store_id or user.store_id
+    products = db.query(Product).filter(Product.active.is_(True)).order_by(Product.name).all()
+    rows = []
+    for p in products:
+        if q and q.lower() not in p.name.lower() and q not in p.barcode:
+            continue
+        inv = (
+            db.query(Inventory)
+            .filter(Inventory.barcode == p.barcode, Inventory.store_id == sid)
+            .first()
+        )
+        on_hand = int(inv.on_hand) if inv else 0
+        sold = int(inv.sales_out) if inv else 0
+        rets = int(inv.returns_in) if inv else 0
+        claims = int(inv.claims) if inv else 0
+        grn = int(inv.grn_in) if inv else 0
+        status = "OUT" if on_hand <= 0 else ("LOW" if on_hand <= (p.reorder or 5) else "OK")
+        rows.append(
+            {
+                "barcode": p.barcode,
+                "name": p.name,
+                "opening": p.opening or 0,
+                "grnIn": grn,
+                "sold": sold,
+                "returns": rets,
+                "claims": claims,
+                "onHand": on_hand,
+                "reorder": p.reorder or 5,
+                "status": status,
+                "cost": p.cost or 0,
+                "retail": p.retail or 0,
+            }
+        )
+    return {"ok": True, "data": rows}
+
+
+@router.get("/grns")
+def list_store_grns(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    status: Optional[str] = "pending",
+    store_id: Optional[str] = None,
+):
+    q = db.query(StoreGRN)
+    sid = store_id or user.store_id
+    if user.role != "admin" or store_id:
+        if sid and sid != "HO":
+            q = q.filter(StoreGRN.store_id == sid)
+    if status:
+        q = q.filter(StoreGRN.status == status)
+    rows = q.order_by(StoreGRN.id.desc()).all()
+    data = [
+        {
+            "GRNID": r.grn_id,
+            "Date": r.date,
+            "StoreID": r.store_id,
+            "StoreName": r.store_name,
+            "Barcode": r.barcode,
+            "Name": r.name,
+            "QtyIssued": r.qty_issued,
+            "QtyReceived": r.qty_received,
+            "Status": r.status,
+            "Notes": r.notes or "",
+        }
+        for r in rows
+    ]
+    return {"ok": True, "data": data}
+
+
+@router.post("/grns/receive")
+def receive_grn(
+    body: GRNReceiveIn,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+):
+    row = (
+        db.query(StoreGRN)
+        .filter(
+            StoreGRN.grn_id == body.grnId,
+            StoreGRN.barcode == body.barcode,
+            StoreGRN.store_id == body.storeId,
+        )
+        .first()
+    )
+    if not row:
+        # try without store match
+        row = (
+            db.query(StoreGRN)
+            .filter(StoreGRN.grn_id == body.grnId, StoreGRN.barcode == body.barcode)
+            .first()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="GRN line not found")
+    if row.status == "received":
+        raise HTTPException(status_code=400, detail="GRN already received")
+
+    qty = int(body.qty or 0)
+    row.qty_received = qty
+    row.status = "received"
+    row.received_at = datetime.utcnow()
+    store_name = body.storeName or row.store_name or user.store_name
+    store_id = body.storeId or row.store_id or user.store_id
+    update_inv(db, body.barcode, store_name, store_id, row.name or "", "grn", qty)
+    db.commit()
+    return {"ok": True, "status": "ok"}
+
+
+@router.post("/grns/issue")
+def issue_grn(
+    body: GRNIssueIn,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(require_role("admin", "manager"))],
+):
+    grn_id = body.grnId or f"GRN-{int(__import__('time').time())}"
+    date = body.date or today_str()
+    count = 0
+    errors = []
+    for line in body.lines:
+        wh = db.query(HOWarehouse).filter(HOWarehouse.barcode == line.barcode).first()
+        ho_stock = int(wh.on_hand) if wh else 0
+        # Allow issue even if HO empty when no warehouse tracking yet — use product opening as soft stock
+        if wh and ho_stock < (line.qty or 0):
+            errors.append(f"{line.barcode} insufficient ({ho_stock})")
+            continue
+        db.add(
+            StoreGRN(
+                grn_id=grn_id,
+                date=date,
+                store_id=body.storeId,
+                store_name=body.storeName,
+                barcode=line.barcode,
+                name=line.name or "",
+                qty_issued=line.qty or 0,
+                qty_received=0,
+                status="pending",
+                notes=body.notes or "",
+            )
+        )
+        if line.qty:
+            update_ho_warehouse(db, line.barcode, line.name or "", line.qty, "out")
+        count += 1
+    db.commit()
+    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "errors": errors}
+
+
+@router.post("/grns/supplier")
+def supplier_grn(
+    body: SupplierGRNIn,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(require_role("admin", "manager"))],
+):
+    grn_id = body.grnId or f"SGRN-{int(__import__('time').time())}"
+    date = body.date or today_str()
+    count = 0
+    for line in body.lines:
+        total = (line.qty or 0) * (line.cost or 0)
+        db.add(
+            SupplierGRN(
+                grn_id=grn_id,
+                date=date,
+                supplier=body.supplier or "",
+                invoice_no=body.invoiceNo or "",
+                barcode=line.barcode,
+                name=line.name or "",
+                qty=line.qty or 0,
+                unit_cost=line.cost or 0,
+                total_cost=total,
+                notes=body.notes or "",
+            )
+        )
+        update_ho_warehouse(db, line.barcode, line.name or "", line.qty or 0, "in")
+        # Ensure product exists lightly
+        if not db.query(Product).filter(Product.barcode == line.barcode).first():
+            db.add(
+                Product(
+                    barcode=line.barcode,
+                    name=line.name or line.barcode,
+                    cost=line.cost or 0,
+                    retail=0,
+                    active=True,
+                )
+            )
+        count += 1
+    db.commit()
+    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id}
+
+
+@router.get("/warehouse")
+def list_warehouse(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(require_role("admin", "manager"))],
+):
+    rows = db.query(HOWarehouse).order_by(HOWarehouse.name).all()
+    data = [
+        {
+            "barcode": r.barcode,
+            "name": r.name,
+            "supplierIn": r.supplier_in,
+            "storeOut": r.store_out,
+            "onHand": r.on_hand,
+        }
+        for r in rows
+    ]
+    return {"ok": True, "data": data}
+
+
+@router.post("/inventory/ensure")
+def ensure_opening_stock(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    store_id: Optional[str] = None,
+):
+    """Materialize product.opening into inventory rows for a store (first-time)."""
+    sid = store_id or user.store_id
+    if sid == "HO":
+        return {"ok": True, "count": 0}
+    store_name = user.store_name
+    products = db.query(Product).filter(Product.active.is_(True)).all()
+    n = 0
+    for p in products:
+        get_or_create_inv(db, p.barcode, store_name, sid, p.name)
+        n += 1
+    db.commit()
+    return {"ok": True, "count": n}
