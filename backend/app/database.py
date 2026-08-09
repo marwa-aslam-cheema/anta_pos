@@ -9,13 +9,27 @@ from .config import get_settings
 settings = get_settings()
 
 connect_args = {}
+pool_kwargs = {}
 if settings.database_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+else:
+    # Free/small Postgres plans still allow well over this many connections.
+    # Default SQLAlchemy pool (5 + 10 overflow = 15) is too small once the
+    # HO dashboard fires ~16 API calls at once — bump it so a normal page
+    # load doesn't exhaust the pool and start timing out other requests
+    # (including login, which needs its own connection too).
+    pool_kwargs = {
+        "pool_size": 15,
+        "max_overflow": 25,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,  # avoid stale connections dropped by the DB host
+    }
 
 engine = create_engine(
     settings.database_url,
     connect_args=connect_args,
     pool_pre_ping=True,
+    **pool_kwargs,
 )
 
 
