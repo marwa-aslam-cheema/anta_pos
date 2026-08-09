@@ -259,7 +259,12 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
         store_cols = {}
         total = 0
         for s in stores:
-            oh = inv_by_key.get((p.barcode, s.store_id), int(p.opening or 0))
+            # No Inventory row = this store has never received this
+            # product, so its stock here is 0 — NOT Product.opening
+            # (that's HO Warehouse's starting stock, not a per-store one;
+            # this was the same phantom-stock bug fixed elsewhere, missed
+            # here originally).
+            oh = inv_by_key.get((p.barcode, s.store_id), 0)
             store_cols[s.store_id] = oh
             total += oh
         ho = ho_by_barcode.get(p.barcode, 0)
