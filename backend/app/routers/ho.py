@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -187,14 +188,32 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
 
 @router.post("/supplier-grn")
 def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Save a Supplier GRN. Batched so large files (thousands of lines) don't
+    time out: the old version ran 2 SELECT queries per line (HO Warehouse +
+    Product lookups) — for 6,730 lines that's 13,000+ round trips before a
+    single row was even saved. This fetches everything needed in 2 queries
+    total, then applies all the changes in memory before one commit.
+    """
     grn_id = body.grnId or f"SGRN-{int(time.time())}"
     date = body.date or today_str()
+
+    lines = [l for l in body.lines if l.barcode and l.qty]
+    barcodes = list({l.barcode for l in lines})
+
+    existing_products = (
+        {p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(barcodes)).all()}
+        if barcodes else {}
+    )
+    existing_wh = (
+        {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+        if barcodes else {}
+    )
+
     count = 0
     total_cost = 0.0
     seen_new_barcodes = set()
-    for line in body.lines:
-        if not line.barcode or not line.qty:
-            continue
+
+    for line in lines:
         tc = (line.qty or 0) * (line.cost or 0)
         total_cost += tc
         db.add(SupplierGRN(
@@ -202,14 +221,30 @@ def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: An
             barcode=line.barcode, name=line.name or "", qty=line.qty or 0, unit_cost=line.cost or 0,
             total_cost=tc, notes=body.notes or "",
         ))
-        update_ho_warehouse(db, line.barcode, line.name or "", line.qty or 0, "in")
-        prod = db.query(Product).filter(Product.barcode == line.barcode).first()
+
+        wh = existing_wh.get(line.barcode)
+        if wh:
+            wh.supplier_in = (wh.supplier_in or 0) + int(line.qty or 0)
+            wh.recalc()
+            wh.updated_at = datetime.utcnow()
+            if line.name:
+                wh.name = line.name
+        else:
+            wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=int(line.qty or 0), store_out=0)
+            wh.recalc()
+            db.add(wh)
+            existing_wh[line.barcode] = wh
+
+        prod = existing_products.get(line.barcode)
         if not prod and line.barcode not in seen_new_barcodes:
-            db.add(Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True))
+            prod = Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True)
+            db.add(prod)
+            existing_products[line.barcode] = prod
             seen_new_barcodes.add(line.barcode)
         elif prod and line.cost and (not prod.cost or prod.cost == 0):
             prod.cost = line.cost
         count += 1
+
     if body.supplier and total_cost > 0:
         sup = db.query(Supplier).filter(Supplier.name == body.supplier).first()
         if not sup:
@@ -232,14 +267,24 @@ def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: An
 
 @router.post("/store-grn")
 def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Issue stock to a store. Batched the same way as Supplier GRN above —
+    one prefetch query for HO Warehouse stock instead of a query per line,
+    so large files don't time out.
+    """
     grn_id = body.grnId or f"GRN-{int(time.time())}"
     date = body.date or today_str()
     count = 0
     errors = []
-    for line in body.lines:
-        if not line.barcode or not line.qty:
-            continue
-        wh = db.query(HOWarehouse).filter(HOWarehouse.barcode == line.barcode).first()
+
+    lines = [l for l in body.lines if l.barcode and l.qty]
+    barcodes = list({l.barcode for l in lines})
+    existing_wh = (
+        {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+        if barcodes else {}
+    )
+
+    for line in lines:
+        wh = existing_wh.get(line.barcode)
         ho_stock = int(wh.on_hand) if wh else 0
         if wh is not None and ho_stock < (line.qty or 0):
             errors.append(f"{line.barcode} insufficient HO ({ho_stock})")
@@ -249,7 +294,17 @@ def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user
             barcode=line.barcode, name=line.name or "", qty_issued=line.qty or 0, qty_received=0,
             status="pending", notes=body.notes or "",
         ))
-        update_ho_warehouse(db, line.barcode, line.name or "", line.qty or 0, "out")
+        if wh:
+            wh.store_out = (wh.store_out or 0) + int(line.qty or 0)
+            wh.recalc()
+            wh.updated_at = datetime.utcnow()
+            if line.name:
+                wh.name = line.name
+        else:
+            wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=0, store_out=int(line.qty or 0))
+            wh.recalc()
+            db.add(wh)
+            existing_wh[line.barcode] = wh
         count += 1
     db.commit()
     return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "errors": errors}
