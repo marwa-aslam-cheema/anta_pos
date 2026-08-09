@@ -189,20 +189,54 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
 GRN_CHUNK_SIZE = 500
 
 
+def _apply_grn_line(db: Session, grn_id: str, date: str, body: "SGRNIn", line, existing_wh: dict, existing_products: dict, seen_new_barcodes: set) -> float:
+    """Apply one Supplier GRN line to the session (no commit). Returns the
+    line's total cost. Raises on failure — caller decides how to handle it.
+    """
+    tc = (line.qty or 0) * (line.cost or 0)
+    db.add(SupplierGRN(
+        grn_id=grn_id, date=date, supplier=body.supplier or "", invoice_no=body.invoiceNo or "",
+        barcode=line.barcode, name=line.name or "", qty=line.qty or 0, unit_cost=line.cost or 0,
+        total_cost=tc, notes=body.notes or "",
+    ))
+    wh = existing_wh.get(line.barcode)
+    if wh:
+        wh.supplier_in = (wh.supplier_in or 0) + int(line.qty or 0)
+        wh.recalc()
+        wh.updated_at = datetime.utcnow()
+        if line.name:
+            wh.name = line.name
+    else:
+        wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=int(line.qty or 0), store_out=0)
+        wh.recalc()
+        db.add(wh)
+        existing_wh[line.barcode] = wh
+    prod = existing_products.get(line.barcode)
+    if not prod and line.barcode not in seen_new_barcodes:
+        prod = Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True)
+        db.add(prod)
+        existing_products[line.barcode] = prod
+        seen_new_barcodes.add(line.barcode)
+    elif prod and line.cost and (not prod.cost or prod.cost == 0):
+        prod.cost = line.cost
+    return tc
+
+
 @router.post("/supplier-grn")
 def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
-    """Save a Supplier GRN, processed in memory-bounded chunks.
+    """Save a Supplier GRN, processed in memory-bounded chunks, with a
+    per-line pass/fail result so the caller knows exactly which barcode (if
+    any) failed and why — not just an overall count.
 
-    The previous version prefetched ALL matching Product + HOWarehouse rows
-    up front and kept every new SupplierGRN/Product/HOWarehouse object alive
-    in the session until one final commit — for 6,730 lines that's roughly
-    3 x 6,730 live ORM objects held in RAM simultaneously, which is what
-    blew past Render's 512MB limit and crashed the instance.
+    Fast path: each chunk of GRN_CHUNK_SIZE (500) lines is applied and
+    committed together (one round trip), then `expunge_all()` frees that
+    chunk's objects before the next one — this is what keeps memory bounded
+    and thousands of lines fast.
 
-    This version handles GRN_CHUNK_SIZE (500) lines at a time: fetch only
-    what that chunk needs, commit the chunk, then `expunge_all()` to let
-    Python free that chunk's objects before moving to the next one. Peak
-    memory stays roughly constant no matter how large the file is.
+    If a chunk's commit fails (bad barcode, constraint violation, etc.),
+    that chunk — and only that chunk, max 500 lines — is retried one line
+    at a time so we can report exactly which line(s) failed without paying
+    the per-line round-trip cost on the normal, all-good path.
     """
     grn_id = body.grnId or f"SGRN-{int(time.time())}"
     date = body.date or today_str()
@@ -210,56 +244,39 @@ def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: An
 
     count = 0
     total_cost = 0.0
+    results: list[dict] = []
 
     for i in range(0, len(lines), GRN_CHUNK_SIZE):
         chunk = lines[i:i + GRN_CHUNK_SIZE]
         chunk_barcodes = list({l.barcode for l in chunk})
-
-        existing_products = {
-            p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(chunk_barcodes)).all()
-        }
-        existing_wh = {
-            w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(chunk_barcodes)).all()
-        }
+        existing_products = {p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(chunk_barcodes)).all()}
+        existing_wh = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(chunk_barcodes)).all()}
         seen_new_barcodes = set()
 
-        for line in chunk:
-            tc = (line.qty or 0) * (line.cost or 0)
-            total_cost += tc
-            db.add(SupplierGRN(
-                grn_id=grn_id, date=date, supplier=body.supplier or "", invoice_no=body.invoiceNo or "",
-                barcode=line.barcode, name=line.name or "", qty=line.qty or 0, unit_cost=line.cost or 0,
-                total_cost=tc, notes=body.notes or "",
-            ))
-
-            wh = existing_wh.get(line.barcode)
-            if wh:
-                wh.supplier_in = (wh.supplier_in or 0) + int(line.qty or 0)
-                wh.recalc()
-                wh.updated_at = datetime.utcnow()
-                if line.name:
-                    wh.name = line.name
-            else:
-                wh = HOWarehouse(barcode=line.barcode, name=line.name or "", supplier_in=int(line.qty or 0), store_out=0)
-                wh.recalc()
-                db.add(wh)
-                existing_wh[line.barcode] = wh
-
-            prod = existing_products.get(line.barcode)
-            if not prod and line.barcode not in seen_new_barcodes:
-                prod = Product(barcode=line.barcode, name=line.name or line.barcode, cost=line.cost or 0, retail=0, active=True)
-                db.add(prod)
-                existing_products[line.barcode] = prod
-                seen_new_barcodes.add(line.barcode)
-            elif prod and line.cost and (not prod.cost or prod.cost == 0):
-                prod.cost = line.cost
-            count += 1
-
         try:
+            chunk_cost = 0.0
+            for line in chunk:
+                chunk_cost += _apply_grn_line(db, grn_id, date, body, line, existing_wh, existing_products, seen_new_barcodes)
             db.commit()
-        except IntegrityError as e:
+            total_cost += chunk_cost
+            count += len(chunk)
+            for line in chunk:
+                results.append({"barcode": line.barcode, "name": line.name or "", "status": "saved", "reason": ""})
+        except Exception:  # noqa: BLE001 — isolate the bad line(s) in this chunk only
             db.rollback()
-            raise HTTPException(status_code=400, detail=f"GRN save failed — duplicate or invalid barcode in the file: {e.orig}")
+            existing_products = {p.barcode: p for p in db.query(Product).filter(Product.barcode.in_(chunk_barcodes)).all()}
+            existing_wh = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(chunk_barcodes)).all()}
+            seen_new_barcodes = set()
+            for line in chunk:
+                try:
+                    tc = _apply_grn_line(db, grn_id, date, body, line, existing_wh, existing_products, seen_new_barcodes)
+                    db.commit()
+                    total_cost += tc
+                    count += 1
+                    results.append({"barcode": line.barcode, "name": line.name or "", "status": "saved", "reason": ""})
+                except Exception as line_err:  # noqa: BLE001
+                    db.rollback()
+                    results.append({"barcode": line.barcode, "name": line.name or "", "status": "failed", "reason": str(line_err)})
         db.expunge_all()  # release this chunk's objects so memory doesn't accumulate
 
     if body.supplier and total_cost > 0:
@@ -276,19 +293,54 @@ def supplier_grn(body: SGRNIn, db: Annotated[Session, Depends(get_db)], user: An
         ))
         db.commit()
 
-    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id}
+    failed = sum(1 for r in results if r["status"] == "failed")
+    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "results": results, "errors": [f"{r['barcode']}: {r['reason']}" for r in results if r["status"] == "failed"]}
+
+
+@router.delete("/supplier-grn/{grn_id}")
+def delete_supplier_grn(grn_id: str, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Undo a Supplier GRN: reverses its effect on HO Warehouse stock, then
+    deletes its line rows and the auto-created supplier ledger entry.
+
+    This is the safe way to fix a mistake in a saved GRN — rather than
+    editing warehouse numbers in place (where a small bug could silently
+    corrupt stock), delete the wrong GRN (which correctly reverses what it
+    added) and re-upload the corrected file.
+    """
+    grn_rows = db.query(SupplierGRN).filter(SupplierGRN.grn_id == grn_id).all()
+    if not grn_rows:
+        raise HTTPException(status_code=404, detail=f"No GRN found with ID {grn_id}")
+
+    barcodes = list({r.barcode for r in grn_rows})
+    wh_by_barcode = {
+        w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()
+    }
+    for r in grn_rows:
+        wh = wh_by_barcode.get(r.barcode)
+        if wh:
+            wh.supplier_in = max(0, (wh.supplier_in or 0) - int(r.qty or 0))
+            wh.recalc()
+            wh.updated_at = datetime.utcnow()
+
+    for r in grn_rows:
+        db.delete(r)
+
+    # Remove the auto-created supplier ledger entry for this GRN, if any.
+    db.query(SupplierTxn).filter(SupplierTxn.notes == f"Auto from supplier GRN {grn_id}").delete(synchronize_session=False)
+
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": len(grn_rows), "grnId": grn_id}
 
 
 @router.post("/store-grn")
 def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
     """Issue stock to a store, processed in memory-bounded chunks (see the
-    supplier-grn endpoint above for why: holding thousands of ORM objects
-    in RAM at once is what crashes a 512MB Render instance).
+    supplier-grn endpoint above for why), with per-line pass/fail results.
     """
     grn_id = body.grnId or f"GRN-{int(time.time())}"
     date = body.date or today_str()
     count = 0
-    errors = []
+    results: list[dict] = []
     lines = [l for l in body.lines if l.barcode and l.qty]
 
     for i in range(0, len(lines), GRN_CHUNK_SIZE):
@@ -302,7 +354,7 @@ def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user
             wh = existing_wh.get(line.barcode)
             ho_stock = int(wh.on_hand) if wh else 0
             if wh is not None and ho_stock < (line.qty or 0):
-                errors.append(f"{line.barcode} insufficient HO ({ho_stock})")
+                results.append({"barcode": line.barcode, "name": line.name or "", "status": "failed", "reason": f"insufficient HO stock ({ho_stock} available, {line.qty} requested)"})
                 continue
             db.add(StoreGRN(
                 grn_id=grn_id, date=date, store_id=body.storeId, store_name=body.storeName,
@@ -321,11 +373,41 @@ def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user
                 db.add(wh)
                 existing_wh[line.barcode] = wh
             count += 1
+            results.append({"barcode": line.barcode, "name": line.name or "", "status": "saved", "reason": ""})
 
         db.commit()
         db.expunge_all()  # release this chunk's objects so memory doesn't accumulate
 
-    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "errors": errors}
+    errors = [f"{r['barcode']}: {r['reason']}" for r in results if r["status"] == "failed"]
+    return {"ok": True, "status": "ok", "count": count, "grnId": grn_id, "results": results, "errors": errors}
+
+
+@router.delete("/store-grn/{grn_id}")
+def delete_store_grn(grn_id: str, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Undo a Send-to-Store GRN that hasn't been received yet: reverses the
+    HO Warehouse stock it reserved and deletes its lines. Only works while
+    status is still 'pending' — once a store has received stock, deleting
+    it here would silently disagree with what physically happened, so that
+    case is rejected instead.
+    """
+    grn_rows = db.query(StoreGRN).filter(StoreGRN.grn_id == grn_id).all()
+    if not grn_rows:
+        raise HTTPException(status_code=404, detail=f"No GRN found with ID {grn_id}")
+    if any(r.status != "pending" for r in grn_rows):
+        raise HTTPException(status_code=400, detail="This GRN has already been received by the store and can't be deleted — use a Stock Transfer to correct it instead")
+
+    barcodes = list({r.barcode for r in grn_rows})
+    wh_by_barcode = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+    for r in grn_rows:
+        wh = wh_by_barcode.get(r.barcode)
+        if wh:
+            wh.store_out = max(0, (wh.store_out or 0) - int(r.qty_issued or 0))
+            wh.recalc()
+            wh.updated_at = datetime.utcnow()
+    for r in grn_rows:
+        db.delete(r)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": len(grn_rows), "grnId": grn_id}
 
 
 @router.post("/transfer")

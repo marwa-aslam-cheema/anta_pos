@@ -84,7 +84,7 @@ function show(name){document.querySelectorAll('.screen').forEach(s=>s.classList.
 if(name==='dashboard')renderDash();if(name==='stores-view')renderStoresView();if(name==='warehouse')renderWarehouse();
 if(name==='supplier-grn'){renderSGRNHist();if($('sgrn-date'))$('sgrn-date').value=today();if($('sgrn-id'))$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);}
 if(name==='store-grn'){renderStGRNTables();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
-if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products')renderProducts();
+if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products')loadProductsIfNeeded();
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
 if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho')renderInvAll();
 if(name==='stores-admin')renderStoresAdmin();if(name==='users'){renderUsers();populateStoreSelects('u-store');}if(name==='banks')renderBanks();
@@ -104,13 +104,35 @@ async function fetchInBatches(fns,batchSize){
   }
   return out;
 }
+function currentScreenName(){const el=document.querySelector('.screen.active');return el?el.id.replace('screen-',''):'';}
+let _productsLoaded=false,_productsLoading=false;
+async function loadProductsIfNeeded(force){
+  // The full product catalog (6,000+ rows on a big account) used to be
+  // fetched on every login and every 90s auto-refresh as part of the main
+  // dashboard batch — that's a lot of data to pull and serialize just to
+  // show a dashboard that doesn't even display the raw product list. Now
+  // it's fetched once, only when the Product Master screen is actually
+  // opened, and cached until you explicitly refresh.
+  if(_productsLoading)return;
+  if(_productsLoaded&&!force){renderProducts();return;}
+  _productsLoading=true;
+  if($('prod-table'))$('prod-table').innerHTML='<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">⏳ Loading products…</td></tr>';
+  try{
+    const prods=await api('/api/products?active_only=false');
+    if(Array.isArray(prods)){
+      DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
+      _productsLoaded=true;
+    }
+  }catch(_e){toast('❌ Failed to load products','error');}
+  finally{_productsLoading=false;}
+  renderProducts();
+}
 async function loadAll(){if(!CFG.token){toast('Login first','warn');return;}setSyncStatus('syncing','Loading...');toast('🔄 Loading live data...','info');
-try{const [dash,sales,prods,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,suptx,caps,bs,cf]=await fetchInBatches([
-()=>api('/api/dashboard'),()=>api('/api/sales?limit=500'),()=>api('/api/products?active_only=false'),()=>api('/api/banks'),()=>api('/api/stores/all'),()=>api('/api/auth/users'),()=>api('/api/expenses?limit=300'),
+try{const [dash,sales,banks,stores,users,exps,wh,sgrns,stgrns,trs,sups,suptx,caps,bs,cf]=await fetchInBatches([
+()=>api('/api/dashboard'),()=>api('/api/sales?limit=500'),()=>api('/api/banks'),()=>api('/api/stores/all'),()=>api('/api/auth/users'),()=>api('/api/expenses?limit=300'),
 ()=>api('/api/ho/warehouse'),()=>api('/api/ho/supplier-grns'),()=>api('/api/ho/store-grns'),()=>api('/api/ho/transfers'),()=>api('/api/ho/suppliers'),()=>api('/api/ho/supplier-txns'),()=>api('/api/ho/capital'),()=>api('/api/ho/bs-entries'),()=>api('/api/ho/cf-items')],4);
 if(dash&&dash.ok)DATA.dashboard=dash;
 if(sales&&sales.data)DATA.sales=sales.data.map(s=>({...s,Date:s.date,Total:s.total,Payment:s.payment,Store:s.store,StoreID:s.storeId}));
-if(Array.isArray(prods))DATA.products=prods.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'}));
 if(Array.isArray(banks))DATA.banks=banks.map(b=>({BankID:b.bank_id,Name:b.name,Device:b.device,Active:b.active?'Y':'N'}));
 const storeRows=Array.isArray(stores)?stores:(stores&&Array.isArray(stores.data)?stores.data:[]);if(storeRows.length||Array.isArray(stores)||(stores&&stores.data))DATA.stores=storeRows.map(s=>({StoreID:s.store_id||s.StoreID,Name:s.name||s.Name,City:s.city||s.City||'',Address:s.address||s.Address||'',Manager:s.manager||s.Manager||'',Phone:s.phone||s.Phone||'',Active:(s.active===false||s.Active==='N')?'N':'Y'}));
 if(Array.isArray(users))DATA.users=users.map(u=>({UserID:u.user_id,StoreID:u.store_id,StoreName:u.store_name,Name:u.name,Role:u.role,Active:u.active?'Y':'N'}));
@@ -120,7 +142,9 @@ if(sups&&sups.data)suppliers=sups.data;if(suptx&&suptx.data)supplierTxns=suptx.d
 if(bs&&bs.data)bsEntries=bs.data.map(b=>({id:b.id,type:b.type,desc:b.desc,amount:b.amount,date:b.date}));
 if(cf&&cf.data){cfItems={investing:[],financing:[]};cf.data.forEach(c=>{if(!cfItems[c.section])cfItems[c.section]=[];cfItems[c.section].push({label:c.label,value:c.value});});}
 setSyncStatus('online','Loaded: '+new Date().toLocaleTimeString());if($('dash-status'))$('dash-status').textContent='Live data loaded: '+new Date().toLocaleTimeString();
-renderDash();populateStoreSelects();try{await loadCategories();}catch(_e){}toast('✅ All data loaded!');}catch(e){setSyncStatus('offline','Error');toast('❌ '+e.message,'error');}}
+renderDash();populateStoreSelects();try{await loadCategories();}catch(_e){}
+if(currentScreenName()==='products'){try{await loadProductsIfNeeded(true);}catch(_e){}}
+toast('✅ All data loaded!');}catch(e){setSyncStatus('offline','Error');toast('❌ '+e.message,'error');}}
 async function loadCategories(){
   const res=await api('/api/categories');
   if(res&&res.ok&&Array.isArray(res.categories)&&res.categories.length)DATA.categories=res.categories;
@@ -160,8 +184,47 @@ function renderSGRNLines(){if(!$('sgrn-lines'))return;$('sgrn-lines').innerHTML=
 function sgrnBC(i,bc){sgrnLines[i].barcode=bc;const p=DATA.products.find(p=>String(p.Barcode)===bc);if(p){sgrnLines[i].name=p.Name;sgrnLines[i].cost=+p.Cost||0;renderSGRNLines();}}
 function calcSGRN(){const tot=sgrnLines.reduce((s,l)=>s+l.qty*l.cost,0);if($('sgrn-n'))$('sgrn-n').textContent=sgrnLines.length;if($('sgrn-total'))$('sgrn-total').textContent=fmt(tot);}
 function clearSGRN(){sgrnLines=[];renderSGRNLines();}
-async function saveSGRN(){if(!sgrnLines.length){toast('Add lines','error');return;}const body={grnId:$('sgrn-id').value,date:$('sgrn-date').value,supplier:$('sgrn-supplier').value,invoiceNo:$('sgrn-inv').value,notes:$('sgrn-notes').value,lines:sgrnLines};const res=await api('/api/ho/supplier-grn',{method:'POST',body});if(res&&res.ok){toast(`✅ GRN ${res.grnId} — ${res.count} items`);sgrnLines=[];renderSGRNLines();$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);await loadAll();renderSGRNHist();}else toast('❌ '+(res&&res.msg||'Error'),'error');}
-function renderSGRNHist(){if($('sgrn-hist'))$('sgrn-hist').innerHTML=DATA.supplierGRNs.slice(0,30).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.Supplier}</td><td>${g.InvoiceNo||'—'}</td><td>${(g.Name||'').slice(0,28)}</td><td>${g.Qty}</td><td>${fmt(g.UnitCost||0)}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:13px">No GRNs</td></tr>';}
+async function saveSGRN(){
+  if(!sgrnLines.length){toast('Add lines','error');return;}
+  const grnId=$('sgrn-id').value||('SGRN-'+Date.now().toString().slice(-6));
+  const meta={grnId,date:$('sgrn-date').value,supplier:$('sgrn-supplier').value,invoiceNo:$('sgrn-inv').value,notes:$('sgrn-notes').value};
+  const startTime=Date.now();
+  const logRows=[];
+  const CHUNK=300;
+  let saved=0,failed=0;
+  bupShow('sgrn-bup');
+  bupUpdate({prefix:'sgrn-bup',status:'⏳ Saving GRN… keep this tab open',done:0,total:sgrnLines.length,startTime});
+  for(let i=0;i<sgrnLines.length;i+=CHUNK){
+    const chunk=sgrnLines.slice(i,i+CHUNK);
+    const res=await api('/api/ho/supplier-grn',{method:'POST',body:{...meta,lines:chunk}});
+    if(res&&res.ok&&Array.isArray(res.results)){
+      res.results.forEach(r=>logRows.push(r));
+      saved+=res.results.filter(r=>r.status==='saved').length;
+      failed+=res.results.filter(r=>r.status==='failed').length;
+    } else {
+      chunk.forEach(l=>logRows.push({barcode:l.barcode||'?',name:l.name||'',status:'failed',reason:(res&&(res.detail||res.msg))||'request failed — no response from server'}));
+      failed+=chunk.length;
+    }
+    bupUpdate({prefix:'sgrn-bup',status:'⏳ Saving GRN… keep this tab open',done:Math.min(i+CHUNK,sgrnLines.length),total:sgrnLines.length,startTime,failed});
+  }
+  bupUpdate({prefix:'sgrn-bup',status:'✅ Done',done:sgrnLines.length,total:sgrnLines.length,startTime,failed});
+  if(saved){
+    toast(`✅ GRN ${grnId} — ${saved} item(s) saved`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
+    sgrnLines=[];renderSGRNLines();$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);
+    await loadAll();renderSGRNHist();
+  } else {
+    toast('❌ GRN save failed — 0 items saved. Check the downloaded log for the reason.','error');
+  }
+  if(logRows.length)downloadEventLog(logRows);
+  setTimeout(()=>bupHide('sgrn-bup'),2500);
+}
+async function deleteSupplierGRN(grnId){
+  if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
+  const res=await api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
+  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderSGRNHist();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
+function renderSGRNHist(){if($('sgrn-hist'))$('sgrn-hist').innerHTML=DATA.supplierGRNs.slice(0,30).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.Supplier}</td><td>${g.InvoiceNo||'—'}</td><td>${(g.Name||'').slice(0,28)}</td><td>${g.Qty}</td><td>${fmt(g.UnitCost||0)}</td><td><button class="btn btn-ghost btn-sm" onclick="deleteSupplierGRN('${g.GRNID}')" title="Delete this GRN — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:13px">No GRNs</td></tr>';}
 function downloadSGRNTemplate(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty,UnitCost\n8001000000001,ANTA Running Pro,20,120\n'],{type:'text/csv'}));a.download='supplier_grn_template.csv';a.click();}
 async function uploadSGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>sgrnLines.push({barcode:String(r.Barcode||'').trim(),name:String(r.Name||'').trim(),qty:+(r.Qty||1),cost:+(r.UnitCost||r.Cost||0)}));renderSGRNLines();toast('✅ '+rows.length+' lines');}
 function dropSGRN(e){e.preventDefault();if(e.dataTransfer.files[0])uploadSGRN(e.dataTransfer.files[0]);}
@@ -170,8 +233,49 @@ function renderStGRNLines(){if(!$('stgrn-lines'))return;$('stgrn-lines').innerHT
 function stgrnBC(i,bc){stgrnLines[i].barcode=bc;const wh=DATA.warehouse.find(w=>String(w.Barcode)===bc);if(wh){stgrnLines[i].name=wh.Name;stgrnLines[i].hoStock=+wh.OnHand||0;renderStGRNLines();}}
 function calcStGRN(){if($('stgrn-n'))$('stgrn-n').textContent=stgrnLines.length;if($('stgrn-total'))$('stgrn-total').textContent=stgrnLines.reduce((s,l)=>s+l.qty,0);}
 function clearStGRN(){stgrnLines=[];renderStGRNLines();}
-async function issueStoreGRN(){const storeId=$('stgrn-store').value;if(!storeId||!stgrnLines.length){toast('Select store + lines','error');return;}const storeName=(DATA.stores.find(s=>s.StoreID===storeId)||{}).Name||storeId;const res=await api('/api/ho/store-grn',{method:'POST',body:{grnId:$('stgrn-id').value,date:$('stgrn-date').value,storeId,storeName,notes:$('stgrn-notes').value,lines:stgrnLines}});if(res&&res.ok){toast(`✅ Issued ${res.count} items`);stgrnLines=[];renderStGRNLines();$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);await loadAll();renderStGRNTables();}else toast('❌ '+(res&&res.msg||'Error'),'error');}
-function renderStGRNTables(){const p=DATA.storeGRNs.filter(g=>g.Status==='pending'),d=DATA.storeGRNs.filter(g=>g.Status==='received');if($('stgrn-pending'))$('stgrn-pending').innerHTML=p.map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';if($('stgrn-done'))$('stgrn-done').innerHTML=d.slice(0,15).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';}
+async function issueStoreGRN(){
+  const storeId=$('stgrn-store').value;
+  if(!storeId||!stgrnLines.length){toast('Select store + lines','error');return;}
+  const storeName=(DATA.stores.find(s=>s.StoreID===storeId)||{}).Name||storeId;
+  const grnId=$('stgrn-id').value||('GRN-'+Date.now().toString().slice(-6));
+  const meta={grnId,date:$('stgrn-date').value,storeId,storeName,notes:$('stgrn-notes').value};
+  const startTime=Date.now();
+  const logRows=[];
+  const CHUNK=300;
+  let saved=0,failed=0;
+  bupShow('stgrn-bup');
+  bupUpdate({prefix:'stgrn-bup',status:'⏳ Issuing stock… keep this tab open',done:0,total:stgrnLines.length,startTime});
+  for(let i=0;i<stgrnLines.length;i+=CHUNK){
+    const chunk=stgrnLines.slice(i,i+CHUNK);
+    const res=await api('/api/ho/store-grn',{method:'POST',body:{...meta,lines:chunk}});
+    if(res&&res.ok&&Array.isArray(res.results)){
+      res.results.forEach(r=>logRows.push(r));
+      saved+=res.results.filter(r=>r.status==='saved').length;
+      failed+=res.results.filter(r=>r.status==='failed').length;
+    } else {
+      chunk.forEach(l=>logRows.push({barcode:l.barcode||'?',name:l.name||'',status:'failed',reason:(res&&(res.detail||res.msg))||'request failed — no response from server'}));
+      failed+=chunk.length;
+    }
+    bupUpdate({prefix:'stgrn-bup',status:'⏳ Issuing stock… keep this tab open',done:Math.min(i+CHUNK,stgrnLines.length),total:stgrnLines.length,startTime,failed});
+  }
+  bupUpdate({prefix:'stgrn-bup',status:'✅ Done',done:stgrnLines.length,total:stgrnLines.length,startTime,failed});
+  if(saved){
+    toast(`✅ Issued ${saved} item(s)`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
+    stgrnLines=[];renderStGRNLines();$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);
+    await loadAll();renderStGRNTables();
+  } else {
+    toast('❌ Issue failed — 0 items saved. Check the downloaded log for the reason.','error');
+  }
+  if(logRows.length)downloadEventLog(logRows);
+  setTimeout(()=>bupHide('stgrn-bup'),2500);
+}
+async function deleteStoreGRN(grnId){
+  if(!confirm(`Delete GRN ${grnId}? This reverses the stock it reserved from HO Warehouse. Only works while it's still pending (not yet received by the store).`))return;
+  const res=await api('/api/ho/store-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
+  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderStGRNTables();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
+function renderStGRNTables(){const p=DATA.storeGRNs.filter(g=>g.Status==='pending'),d=DATA.storeGRNs.filter(g=>g.Status==='received');if($('stgrn-pending'))$('stgrn-pending').innerHTML=p.map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}')" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';if($('stgrn-done'))$('stgrn-done').innerHTML=d.slice(0,15).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';}
 function downloadStGRNTemplate(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty\n8001000000001,ANTA Running Pro,10\n'],{type:'text/csv'}));a.download='store_grn_template.csv';a.click();}
 async function uploadStGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>{const bc=String(r.Barcode||'').trim();const wh=DATA.warehouse.find(w=>String(w.Barcode)===bc);stgrnLines.push({barcode:bc,name:String(r.Name||wh?.Name||'').trim(),qty:+(r.Qty||1),hoStock:+(wh?.OnHand||0)});});renderStGRNLines();toast('✅ '+rows.length+' lines');}
 function addTrLine(){trLines.push({barcode:'',name:'',qty:1,notes:''});renderTrLines();}
@@ -331,26 +435,32 @@ function downloadEventLog(logRows){
   const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));a.download=`products_upload_log_${ts}.csv`;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
-async function uploadChunkResilient(chunk,logRows){
+async function uploadChunkResilient(chunk,logRows,endpoint,rowKey){
   // Send the chunk. If the server processed it (even partially — see the
   // per-row `results` it returns), record every row's pass/fail and stop.
   // If the WHOLE request failed outright (timeout, network drop, 500),
   // don't give up on the data: split the chunk in half and retry each
   // half on its own, all the way down to single rows if necessary, so a
   // single bad row is the only thing that can ever be lost.
-  const res=await api('/api/products/bulk',{method:'POST',body:chunk});
+  const res=await api(endpoint,{method:'POST',body:rowKey?{[rowKey]:chunk}:chunk});
   if(res&&res.ok&&Array.isArray(res.results)){
     res.results.forEach(r=>logRows.push(r));
     return {created:res.created||0,updated:res.updated||0,failed:res.results.filter(r=>r.status==='failed').length};
   }
+  if(res&&res.ok&&!Array.isArray(res.results)){
+    // Endpoint succeeded but doesn't return per-row results (e.g. whole
+    // chunk saved in one go) — count every row in this chunk as passed.
+    chunk.forEach(r=>logRows.push({barcode:r.barcode||'?',name:r.name||'',status:'saved',reason:''}));
+    return {created:res.count||chunk.length,updated:0,failed:0};
+  }
   if(chunk.length<=1){
     const only=chunk[0]||{};
-    logRows.push({barcode:only.barcode||'?',name:only.name||'',status:'failed',reason:(res&&res.msg)||'request failed — no response from server'});
+    logRows.push({barcode:only.barcode||'?',name:only.name||'',status:'failed',reason:(res&&(res.detail||res.msg))||'request failed — no response from server'});
     return {created:0,updated:0,failed:1};
   }
   const mid=Math.ceil(chunk.length/2);
-  const r1=await uploadChunkResilient(chunk.slice(0,mid),logRows);
-  const r2=await uploadChunkResilient(chunk.slice(mid),logRows);
+  const r1=await uploadChunkResilient(chunk.slice(0,mid),logRows,endpoint,rowKey);
+  const r2=await uploadChunkResilient(chunk.slice(mid),logRows,endpoint,rowKey);
   return {created:r1.created+r2.created,updated:r1.updated+r2.updated,failed:r1.failed+r2.failed};
 }
 function fmtSecs(s){
@@ -361,23 +471,26 @@ function fmtSecs(s){
   const h=Math.floor(m/60),rm=m%60;
   return h+'h '+rm+'m';
 }
-function bupShow(){const el=$('bulk-upload-progress');if(el)el.style.display='block';}
-function bupHide(){const el=$('bulk-upload-progress');if(el)el.style.display='none';}
-function bupUpdate({status,done,total,startTime}){
-  if($('bup-status'))$('bup-status').textContent=status;
-  if($('bup-count'))$('bup-count').textContent=`${done} / ${total}`;
-  if($('bup-bar'))$('bup-bar').style.width=(total?Math.round(done/total*100):0)+'%';
+function bupShow(prefix){prefix=prefix||'bup';const el=$(prefix+'-panel')||$('bulk-upload-progress');if(el)el.style.display='block';}
+function bupHide(prefix){prefix=prefix||'bup';const el=$(prefix+'-panel')||$('bulk-upload-progress');if(el)el.style.display='none';}
+function bupUpdate(opts){
+  const prefix=opts.prefix||'bup';
+  const {status,done,total,startTime,failed}=opts;
+  const statusEl=$(prefix+'-status');
+  if(statusEl)statusEl.textContent=status+(failed?` — ⚠️ ${failed} failed`:'');
+  if($(prefix+'-count'))$(prefix+'-count').textContent=`${done} / ${total}`;
+  if($(prefix+'-bar'))$(prefix+'-bar').style.width=(total?Math.round(done/total*100):0)+'%';
   const elapsedSec=(Date.now()-startTime)/1000;
-  if($('bup-elapsed'))$('bup-elapsed').textContent='Elapsed: '+fmtSecs(elapsedSec);
-  if($('bup-eta')){
+  if($(prefix+'-elapsed'))$(prefix+'-elapsed').textContent='Elapsed: '+fmtSecs(elapsedSec);
+  if($(prefix+'-eta')){
     if(done>0&&done<total){
       const rate=done/elapsedSec; // rows/sec
       const remaining=(total-done)/rate;
-      $('bup-eta').textContent='Estimated remaining: '+fmtSecs(remaining);
+      $(prefix+'-eta').textContent='Estimated remaining: '+fmtSecs(remaining);
     } else if(done>=total){
-      $('bup-eta').textContent='Done in '+fmtSecs(elapsedSec);
+      $(prefix+'-eta').textContent='Done in '+fmtSecs(elapsedSec);
     } else {
-      $('bup-eta').textContent='Estimated remaining: calculating…';
+      $(prefix+'-eta').textContent='Estimated remaining: calculating…';
     }
   }
 }
@@ -443,12 +556,12 @@ async function uploadProducts(file){
   for(let i=0;i<items.length;i+=CHUNK){
     const chunk=items.slice(i,i+CHUNK);
     const doneSoFar=Math.min(i+CHUNK,items.length);
-    bupUpdate({status:'⏳ Uploading products… keep this tab open',done:i,total:items.length,startTime});
-    const r=await uploadChunkResilient(chunk,logRows);
+    bupUpdate({status:'⏳ Uploading products… keep this tab open',done:i,total:items.length,startTime,failed});
+    const r=await uploadChunkResilient(chunk,logRows,'/api/products/bulk',null);
     created+=r.created;updated+=r.updated;failed+=r.failed;
-    bupUpdate({status:'⏳ Uploading products… keep this tab open',done:doneSoFar,total:items.length,startTime});
+    bupUpdate({status:'⏳ Uploading products… keep this tab open',done:doneSoFar,total:items.length,startTime,failed});
   }
-  bupUpdate({status:'✅ Upload complete',done:items.length,total:items.length,startTime});
+  bupUpdate({status:'✅ Upload complete',done:items.length,total:items.length,startTime,failed});
   if(created||updated){
     toast('✅ Uploaded — '+created+' created, '+updated+' updated'+(failed?(', '+failed+' failed — see downloaded event log'):''), failed?'warn':'ok');
   } else {
