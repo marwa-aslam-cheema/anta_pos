@@ -231,17 +231,26 @@ def list_transfers(db: Annotated[Session, Depends(get_db)], user: Annotated[Curr
 
 
 @router.get("/inventory-all")
-def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)], q: Optional[str] = None):
-    """All-store inventory grid. Old version ran a query per (product x
-    store) pair — for 6,687 products x 3 stores that's 20,000+ queries,
-    plus one more per product for HO Warehouse. Now: one query for
-    products, one for stores, one for ALL inventory rows, one for ALL
-    warehouse rows — 4 total, regardless of catalog size.
+def inventory_all(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    q: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+):
+    """All-store inventory grid, paginated + searchable (same pattern as
+    Product Master). Old version ran a query per (product x store) pair —
+    for 6,687 products x 3 stores that's 20,000+ queries. Now: one query
+    for the page of products, one for stores, one for ALL inventory rows,
+    one for ALL warehouse rows — 4 total, regardless of catalog size.
     """
     query = db.query(Product).filter(Product.active.is_(True))
     if q:
         like = f"%{q}%"
         query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
+    query = query.order_by(Product.name)
+    if limit is not None:
+        query = query.offset(offset).limit(limit)
     products = query.all()
     stores = db.query(Store).filter(Store.store_id != "HO", Store.active.is_(True)).all()
 
@@ -270,6 +279,15 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
         ho = ho_by_barcode.get(p.barcode, 0)
         rows.append({"barcode": p.barcode, "name": p.name, "cost": p.cost or 0, "retail": p.retail or 0, "ho": ho, "stores": store_cols, "total": total + ho})
     return {"ok": True, "status": "ok", "stores": [{"store_id": s.store_id, "name": s.name} for s in stores], "data": rows}
+
+
+@router.get("/inventory-all/count")
+def inventory_all_count(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)], q: Optional[str] = None):
+    query = db.query(Product).filter(Product.active.is_(True))
+    if q:
+        like = f"%{q}%"
+        query = query.filter((Product.name.ilike(like)) | (Product.barcode.ilike(like)))
+    return {"ok": True, "count": query.count()}
 
 
 GRN_CHUNK_SIZE = 500

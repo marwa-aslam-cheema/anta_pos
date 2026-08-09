@@ -490,34 +490,14 @@ body{display:flex;height:100vh;overflow:hidden}
 
   <!-- INVENTORY ALL -->
   <div id="screen-inventory-ho" class="screen">
-    <div class="card" style="background:var(--gray0);border:1px solid var(--amber)">
-      <div class="card-title">🔧 Fix Store Stock (one-time correction)</div>
-      <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">
-        Purani bug ki wajah se stores mein "phantom" stock dikh sakta hai (Product Master ke Qty column se accidentally copy ho gaya tha).
-        Ye tool ek store ka stock **sirf actual received GRNs** se dobara sahi banata hai — sales/returns ko chuata nahi. Zaroorat na ho to na chalayein; safe hai dobara chalana bhi.
-      </p>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select class="form-input" id="recalc-store" style="width:220px"></select>
-        <button class="btn btn-primary btn-sm" onclick="recalculateStoreInventory(this)">🔄 Recalculate This Store's Stock</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="resetAllStores(this)">♻️ Reset ALL Stores to 0</button>
-      </div>
-    </div>
-    <div class="card" style="background:#fff0f0;border:1px solid var(--red)">
-      <div class="card-title" style="color:var(--red)">☢️ Danger Zone — Full Reset</div>
-      <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">
-        Ye Products, HO Warehouse, Supplier GRN, Send-to-Store GRN, har store ki Inventory, aur Stock Transfers — sab **poori tarah delete** kar dega.
-        Users, PINs, Stores, Banks, Capital/Balance Sheet entries, Expenses, aur past Sales/Returns/Exchanges/Claims **safe rahenge**, unhe touch nahi kiya jayega.
-        Isse fresh start milta hai — sahi Product Master file dobara upload karke sab dobara set kar sakte hain.
-      </p>
-      <button class="btn btn-primary btn-sm" style="background:var(--red);border-color:var(--red)" onclick="resetAllProductStockData(this)">☢️ Reset ALL Products, Stock &amp; GRN Data</button>
-    </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
         <div class="card-title" style="margin:0">🗃️ Inventory — All Stores</div>
-        <input class="form-input" style="width:200px;padding:5px 9px" id="inv-search" placeholder="🔍 Search..." oninput="renderInvAll()">
+        <input class="form-input" style="width:200px;padding:5px 9px" id="inv-search" placeholder="🔍 Search by barcode or product…" oninput="searchInvAll(this.value)">
       </div>
       <table><thead><tr><th>Barcode</th><th>Product</th><th>HO Stock</th><th id="inv-s1">Store 1</th><th id="inv-s2">Store 2</th><th id="inv-s3">Store 3</th><th>Total Stock</th></tr></thead>
       <tbody id="inv-all-table"></tbody></table>
+      <div id="inv-all-pagination"></div>
     </div>
   </div>
 

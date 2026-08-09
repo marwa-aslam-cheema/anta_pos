@@ -88,7 +88,7 @@ if(name==='supplier-grn'){sgrnHistCurrentPage=1;fetchAndRenderSGRNHist();if($('s
 if(name==='store-grn'){renderStGRNTables();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
 if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products'){prodCurrentPage=1;fetchAndRenderProductsPage();}
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
-if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho'){populateStoreSelects('recalc-store');renderInvAll();}
+if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho'){invAllCurrentPage=1;fetchAndRenderInvAll();}
 if(name==='stores-admin')renderStoresAdmin();if(name==='users'){renderUsers();populateStoreSelects('u-store');}if(name==='banks')renderBanks();
 if(name==='settings'&&$('api-url'))$('api-url').value=CFG.apiUrl;
 if(name==='balance-sheet'){if($('bs-date'))$('bs-date').value=today();loadBalanceSheet();}
@@ -815,7 +815,49 @@ async function recalculateStoreInventory(btn){
   if(res&&res.ok){toast(`✅ Fixed — ${res.updated} product(s) corrected for ${storeName}`);renderInvAll();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Recalculate failed'),'error');
 }
-async function renderInvAll(){const res=await api('/api/ho/inventory-all');const el=$('inv-all-table')||$('inv-ho-table');if(!el)return;if(!res||!res.data){el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:14px">No data</td></tr>';return;}const stores=res.stores||[];el.innerHTML=res.data.map(r=>`<tr><td style="font-family:monospace;font-size:10px">${r.barcode}</td><td class="fw7">${r.name}</td><td>${r.ho}</td>${stores.map(s=>`<td style="text-align:center">${(r.stores&&r.stores[s.store_id])||0}</td>`).join('')}<td class="fw7">${r.total}</td></tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--gray3);padding:14px">Empty</td></tr>';}
+let invAllPageSize=20,invAllCurrentPage=1,invAllSearchQuery='',invAllTotalCount=0,invAllStores=[];
+async function fetchAndRenderInvAll(){
+  const offset=(invAllCurrentPage-1)*invAllPageSize;
+  const qs=new URLSearchParams({limit:String(invAllPageSize),offset:String(offset)});
+  if(invAllSearchQuery)qs.set('q',invAllSearchQuery);
+  const countQs=new URLSearchParams();if(invAllSearchQuery)countQs.set('q',invAllSearchQuery);
+  const el=$('inv-all-table');
+  if(el)el.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">⏳ Loading…</td></tr>';
+  try{
+    const [res,countRes]=await Promise.all([
+      api('/api/ho/inventory-all?'+qs.toString()),
+      api('/api/ho/inventory-all/count?'+countQs.toString()),
+    ]);
+    if(el&&res&&res.data){
+      invAllStores=res.stores||[];
+      el.innerHTML=res.data.map(r=>`<tr><td style="font-family:monospace;font-size:10px">${r.barcode}</td><td class="fw7">${r.name}</td><td>${r.ho}</td>${invAllStores.map(s=>`<td style="text-align:center">${(r.stores&&r.stores[s.store_id])||0}</td>`).join('')}<td class="fw7">${r.total}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">No products found</td></tr>';
+    } else if(el){
+      el.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">No data</td></tr>';
+    }
+    invAllTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:0;
+  }catch(_e){
+    if(el)el.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">Failed to load</td></tr>';
+    invAllTotalCount=0;
+  }
+  renderInvAllPagination();
+}
+function searchInvAll(query){
+  clearTimeout(window._invAllSearchDebounce);
+  window._invAllSearchDebounce=setTimeout(()=>{invAllSearchQuery=String(query||'').trim();invAllCurrentPage=1;fetchAndRenderInvAll();},180);
+}
+function renderInvAllPagination(){
+  const container=$('inv-all-pagination');
+  if(!container)return;
+  const totalPages=Math.max(1,Math.ceil(invAllTotalCount/invAllPageSize));
+  invAllCurrentPage=Math.max(1,Math.min(invAllCurrentPage,totalPages));
+  let html='<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">';
+  if(invAllCurrentPage>1)html+=`<button class="btn btn-ghost btn-sm" onclick="invAllCurrentPage--;fetchAndRenderInvAll()">← Previous</button>`;
+  html+=`<span style="font-size:11px;color:var(--gray4)">Page ${invAllCurrentPage} of ${totalPages} · ${invAllTotalCount} product(s)${invAllSearchQuery?` match "${invAllSearchQuery}"`:''}</span>`;
+  if(invAllCurrentPage<totalPages)html+=`<button class="btn btn-ghost btn-sm" onclick="invAllCurrentPage++;fetchAndRenderInvAll()">Next →</button>`;
+  html+='</div>';
+  container.innerHTML=html;
+}
+function renderInvAll(){fetchAndRenderInvAll();}
 function renderStoresAdmin(){const el=$('stores-table')||$('stores-admin-table')||$('sa-table');if(!el)return;const rows=DATA.stores||[];el.innerHTML=rows.map(s=>`<tr><td class="fw7">${s.StoreID||s.store_id||''}</td><td>${s.Name||s.name||''}</td><td>${s.City||s.city||''}</td><td>${s.Manager||s.manager||''}</td><td>${s.Phone||s.phone||''}</td><td><span class="badge badge-green">${(s.Active==='N'||s.active===false)?'Inactive':'Active'}</span></td><td><button class="btn btn-ghost btn-sm" onclick="editStore('${s.StoreID||s.store_id||''}')">Edit</button></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">No stores yet</td></tr>';}
 function showAddStore(){const f=$('store-form')||$('add-store-form');if(f)f.style.display='flex';['st-id','st-nm','st-city','st-addr','st-mgr','st-ph'].forEach(id=>{const el=$(id);if(el){el.value='';if(id==='st-id')el.disabled=false;}});} 
 function editStore(id){const s=(DATA.stores||[]).find(x=>(x.StoreID||x.store_id)===id);const f=$('store-form')||$('add-store-form');if(!s||!f)return;f.style.display='flex';if($('st-id')){$('st-id').value=s.StoreID||s.store_id||'';$('st-id').disabled=true;}if($('st-nm'))$('st-nm').value=s.Name||s.name||'';if($('st-city'))$('st-city').value=s.City||s.city||'';if($('st-addr'))$('st-addr').value=s.Address||s.address||'';if($('st-mgr'))$('st-mgr').value=s.Manager||s.manager||'';if($('st-ph'))$('st-ph').value=s.Phone||s.phone||'';}
