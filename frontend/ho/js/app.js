@@ -219,6 +219,24 @@ async function saveSGRN(){
   if(logRows.length)downloadEventLog(logRows);
   setTimeout(()=>bupHide('sgrn-bup'),2500);
 }
+async function deleteAllGRNAndWarehouse(){
+  // Dry run first — ask the server how many rows this would touch so the
+  // confirm dialog shows real counts, not a guess.
+  const preview=await api('/api/ho/reset-supplier-grn-and-warehouse',{method:'POST'});
+  if(!preview||!preview.ok){toast('❌ '+((preview&&(preview.detail||preview.msg))||'Could not check what would be deleted'),'error');return;}
+  const c=preview.wouldDelete||{supplierGRNRows:0,hoWarehouseRows:0,linkedSupplierTxns:0};
+  if(!c.supplierGRNRows&&!c.hoWarehouseRows){toast('Nothing to delete — Supplier GRN history and HO Warehouse are already empty');return;}
+  const msg=`Delete ALL Supplier GRN history (${c.supplierGRNRows} lines) and ALL HO Warehouse stock (${c.hoWarehouseRows} products)?\n\nThis does NOT touch Products, Send-to-Store history, Transfers, or per-store inventory — only Supplier GRN + HO Warehouse are wiped.\n\nThis cannot be undone. Type-confirm by pressing OK.`;
+  if(!confirm(msg))return;
+  if(!confirm('Are you absolutely sure? This will permanently erase all Supplier GRN and HO Warehouse records.'))return;
+  const res=await api('/api/ho/reset-supplier-grn-and-warehouse?confirm=true',{method:'POST'});
+  if(res&&res.ok){
+    toast(`✅ Deleted — ${res.deleted.supplierGRNRows} GRN lines, ${res.deleted.hoWarehouseRows} warehouse rows`);
+    await loadAll();
+    await fetchAndRenderSGRNHist();
+    renderWarehouse();
+  } else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
 async function deleteSupplierGRN(grnId){
   if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
   const res=await api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
@@ -529,25 +547,24 @@ async function saveProd(){
   } else toast('❌ '+((res&&res.msg)||'Failed'),'error');
 }
 async function downloadProdTemplate(){
-  const categories=(DATA.categories&&DATA.categories.length)?DATA.categories:['Running','Casual','Basketball','Training','Kids','Slippers','Other'];
-  const genders=['Men','Women','Kids','Unisex'];
+  // Simplified template: only Barcode, Name, Qty are needed to import a
+  // product and set its HO Warehouse (Total Stock) quantity. Everything
+  // else (brand/category/cost/etc.) is optional on the backend and left
+  // out here on purpose so the sheet stays quick to fill — add extra
+  // columns (Brand, Category, Cost, Retail, ...) later only if needed;
+  // the uploader still recognizes them if present.
   if(typeof ExcelJS==='undefined'){
-    // Fallback: plain CSV (no dropdowns) if ExcelJS failed to load (e.g. offline)
-    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Brand,Category,Department,Season,Gender,Size,Color,Cost,Retail,Reorder,Qty\n8001000000009,ANTA Sample Shoe,ANTA,Running,Footwear,SS26,Men,42,White,120,180,5,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    // Fallback: plain CSV if ExcelJS failed to load (e.g. offline)
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty\n8001000000009,ANTA Sample Shoe,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
     return;
   }
   const wb=new ExcelJS.Workbook();
   const ws=wb.addWorksheet('Products');
-  const headers=['Barcode','Name','Brand','Category','Department','Season','Gender','Size','Color','Cost','Retail','Reorder','Qty'];
+  const headers=['Barcode','Name','Qty'];
   ws.addRow(headers);
   ws.getRow(1).font={bold:true};
-  ws.addRow(['8001000000009','ANTA Sample Shoe','ANTA','Running','Footwear','SS26','Men','42','White',120,180,5,25]);
-  ws.columns.forEach(c=>c.width=15);
-  const catCol='D',genderCol='G',lastRow=1000;
-  for(let r=2;r<=lastRow;r++){
-    ws.getCell(catCol+r).dataValidation={type:'list',allowBlank:true,formulae:[`"${categories.join(',')}"`]};
-    ws.getCell(genderCol+r).dataValidation={type:'list',allowBlank:true,formulae:[`"${genders.join(',')}"`]};
-  }
+  ws.addRow(['8001000000009','ANTA Sample Shoe',25]);
+  ws.columns.forEach(c=>c.width=22);
   const buf=await wb.xlsx.writeBuffer();
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='products_template.xlsx';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
