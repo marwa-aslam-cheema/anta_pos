@@ -249,6 +249,48 @@ def inventory_all(db: Annotated[Session, Depends(get_db)], user: Annotated[Curre
     return {"ok": True, "status": "ok", "stores": [{"store_id": s.store_id, "name": s.name} for s in stores], "data": rows}
 
 
+@router.post("/reset-supplier-grn-and-warehouse")
+def reset_supplier_grn_and_warehouse(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    confirm: bool = False,
+):
+    """One-time cleanup: wipes Supplier GRN history and HO Warehouse stock.
+
+    Scope is intentionally narrow — only these two:
+      - SupplierGRN rows (Supplier GRN history)
+      - HOWarehouse rows (HO Warehouse on-hand/supplier_in/store_out)
+      - SupplierTxn rows that were auto-created FROM a supplier GRN (notes
+        starts with "Auto from supplier GRN ") — manual supplier ledger
+        entries (payments, manual invoices) are left untouched.
+
+    Does NOT touch: Products, StoreGRN (Send Stock to Stores) history,
+    Transfers, or per-store Inventory — none of that was asked for.
+    Requires ?confirm=true to actually run (safety against accidental
+    calls); without it, returns counts of what WOULD be deleted.
+    """
+    grn_count = db.query(SupplierGRN).count()
+    wh_count = db.query(HOWarehouse).count()
+    txn_count = db.query(SupplierTxn).filter(SupplierTxn.notes.like("Auto from supplier GRN%")).count()
+
+    if not confirm:
+        return {
+            "ok": True,
+            "dryRun": True,
+            "wouldDelete": {"supplierGRNRows": grn_count, "hoWarehouseRows": wh_count, "linkedSupplierTxns": txn_count},
+            "message": "Nothing deleted — call again with ?confirm=true to actually wipe these.",
+        }
+
+    db.query(SupplierGRN).delete(synchronize_session=False)
+    db.query(HOWarehouse).delete(synchronize_session=False)
+    db.query(SupplierTxn).filter(SupplierTxn.notes.like("Auto from supplier GRN%")).delete(synchronize_session=False)
+    db.commit()
+    return {
+        "ok": True,
+        "deleted": {"supplierGRNRows": grn_count, "hoWarehouseRows": wh_count, "linkedSupplierTxns": txn_count},
+    }
+
+
 GRN_CHUNK_SIZE = 500
 
 
