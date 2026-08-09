@@ -477,6 +477,45 @@ def delete_all_supplier_grn_lines(db: Annotated[Session, Depends(get_db)], user:
         wh.updated_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "status": "ok", "deleted": n}
+
+
+@router.post("/reset-all-product-stock-data")
+def reset_all_product_stock_data(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(require_role("admin"))]):
+    """FULL RESET of everything product/stock/GRN related, for starting
+    completely fresh after test data got messy.
+
+    Deletes: Products (Product Master), HO Warehouse stock, Supplier GRN
+    history, Store GRN history, every store's Inventory, Stock Transfers
+    between stores, and Supplier ledger entries (Supplier accounts are
+    kept, only their transaction history is cleared since it was tied to
+    the GRNs being wiped).
+
+    Left completely untouched: Users & PINs, Stores, Banks, Capital
+    entries, Balance Sheet / Cash Flow entries, Expenses, and past Sales /
+    Returns / Exchanges / Claims (those are real sales history, not
+    product/stock setup data).
+    """
+    counts = {
+        "products": db.query(Product).count(),
+        "ho_warehouse": db.query(HOWarehouse).count(),
+        "supplier_grn": db.query(SupplierGRN).count(),
+        "store_grn": db.query(StoreGRN).count(),
+        "inventory": db.query(Inventory).count(),
+        "transfers": db.query(Transfer).count(),
+        "supplier_txns": db.query(SupplierTxn).count(),
+    }
+    db.query(SupplierGRN).delete(synchronize_session=False)
+    db.query(StoreGRN).delete(synchronize_session=False)
+    db.query(HOWarehouse).delete(synchronize_session=False)
+    db.query(Inventory).delete(synchronize_session=False)
+    db.query(Transfer).delete(synchronize_session=False)
+    db.query(SupplierTxn).delete(synchronize_session=False)
+    db.query(Product).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": counts}
+
+
+@router.post("/store-grn")
 def issue_store_grn(body: StGRNIn, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
     """Issue stock to a store, processed in memory-bounded chunks (see the
     supplier-grn endpoint above for why), with per-line pass/fail results.

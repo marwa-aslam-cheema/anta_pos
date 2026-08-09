@@ -502,6 +502,15 @@ body{display:flex;height:100vh;overflow:hidden}
         <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="resetAllStores(this)">♻️ Reset ALL Stores to 0</button>
       </div>
     </div>
+    <div class="card" style="background:#fff0f0;border:1px solid var(--red)">
+      <div class="card-title" style="color:var(--red)">☢️ Danger Zone — Full Reset</div>
+      <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">
+        Ye Products, HO Warehouse, Supplier GRN, Send-to-Store GRN, har store ki Inventory, aur Stock Transfers — sab **poori tarah delete** kar dega.
+        Users, PINs, Stores, Banks, Capital/Balance Sheet entries, Expenses, aur past Sales/Returns/Exchanges/Claims **safe rahenge**, unhe touch nahi kiya jayega.
+        Isse fresh start milta hai — sahi Product Master file dobara upload karke sab dobara set kar sakte hain.
+      </p>
+      <button class="btn btn-primary btn-sm" style="background:var(--red);border-color:var(--red)" onclick="resetAllProductStockData(this)">☢️ Reset ALL Products, Stock &amp; GRN Data</button>
+    </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
         <div class="card-title" style="margin:0">🗃️ Inventory — All Stores</div>

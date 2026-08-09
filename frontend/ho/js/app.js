@@ -770,6 +770,23 @@ async function runWithElapsedTimer(btn,label,fn){
     if(btn){btn.disabled=false;btn.innerHTML=original;}
   }
 }
+async function resetAllProductStockData(btn){
+  if(!confirm('☢️ FULL RESET — this permanently deletes ALL Products, HO Warehouse stock, Supplier GRN history, Send-to-Store GRN history, every store\'s Inventory, and Stock Transfers.\n\nUsers, PINs, Stores, Banks, Capital/Balance Sheet entries, Expenses, and past Sales/Returns/Exchanges are NOT affected.\n\nThis CANNOT be undone. Continue?'))return;
+  const typed=prompt('To confirm, type RESET (all caps) below:');
+  if(typed!=='RESET'){toast('Cancelled — text didn\'t match','warn');return;}
+  const res=await runWithElapsedTimer(btn,'Resetting everything',()=>api('/api/ho/reset-all-product-stock-data',{method:'POST'}));
+  if(res&&res.ok){
+    const d=res.deleted||{};
+    toast(`✅ Full reset done — ${d.products||0} products, ${d.ho_warehouse||0} warehouse rows, ${d.supplier_grn||0} supplier GRN lines, ${d.store_grn||0} store GRN lines, ${d.inventory||0} inventory rows cleared`);
+    await loadAll();
+    if(currentScreenName()==='inventory-ho')renderInvAll();
+    if(currentScreenName()==='warehouse')renderWarehouse();
+    if(currentScreenName()==='supplier-grn'){sgrnHistCurrentPage=1;await fetchAndRenderSGRNHist();}
+    if(currentScreenName()==='products')await fetchAndRenderProductsPage();
+  } else {
+    toast('❌ '+((res&&(res.detail||res.msg))||'Reset failed'),'error');
+  }
+}
 async function resetAllStores(btn){
   if(!confirm('Reset ALL stores\' stock to 0? This clears every store\'s inventory counters (grn/sold/returns/on-hand) in one go — Sales/Returns/Exchange records themselves are NOT deleted, only the stock summary. This cannot be undone. Continue?'))return;
   if(!confirm('Are you absolutely sure? This affects ALL stores at once.'))return;
