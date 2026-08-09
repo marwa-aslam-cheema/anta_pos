@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import CurrentUser, get_current_user, require_role
@@ -236,7 +237,13 @@ def ensure_opening_stock(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     store_id: Optional[str] = None,
 ):
-    """Materialize product.opening into inventory rows for a store (first-time)."""
+    """Materialize an (empty) inventory row for a store's products (first-time).
+
+    NOTE: this used to seed on_hand from Product.opening — that was a bug,
+    since `opening` is HO Warehouse's starting stock, not a per-store
+    quantity (see get_or_create_inv). It now just makes sure a zeroed row
+    exists; real stock only ever arrives via a received Store GRN.
+    """
     sid = store_id or user.store_id
     if sid == "HO":
         return {"ok": True, "count": 0}
@@ -248,3 +255,44 @@ def ensure_opening_stock(
         n += 1
     db.commit()
     return {"ok": True, "count": n}
+
+
+@router.post("/inventory/recalculate")
+def recalculate_store_inventory(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(require_role("admin"))],
+    store_id: Optional[str] = None,
+):
+    """Fix a store's inventory after the Product.opening phantom-stock bug:
+    rebuilds `grn_in` for every product in this store strictly from actual
+    received Store GRN history (StoreGRN rows with status='received'),
+    replacing whatever phantom value got seeded by the old /inventory/ensure
+    behavior. Sales, returns, exchanges, and claims are left completely
+    untouched — those are real transaction history, not part of the bug.
+
+    Safe to run more than once; it always recomputes from the same source
+    of truth (received GRNs), so it converges to the correct number.
+    """
+    sid = store_id
+    if not sid or sid == "HO":
+        raise HTTPException(status_code=400, detail="Choose a specific store")
+
+    received_rows = (
+        db.query(StoreGRN.barcode, func.sum(StoreGRN.qty_received))
+        .filter(StoreGRN.store_id == sid, StoreGRN.status == "received")
+        .group_by(StoreGRN.barcode)
+        .all()
+    )
+    received_by_barcode = {barcode: int(total or 0) for barcode, total in received_rows}
+
+    inv_rows = db.query(Inventory).filter(Inventory.store_id == sid).all()
+    updated = 0
+    for row in inv_rows:
+        correct_grn_in = received_by_barcode.get(row.barcode, 0)
+        if row.grn_in != correct_grn_in:
+            row.grn_in = correct_grn_in
+            row.recalc()
+            row.updated_at = datetime.utcnow()
+            updated += 1
+    db.commit()
+    return {"ok": True, "status": "ok", "updated": updated, "storeId": sid}

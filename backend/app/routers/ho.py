@@ -138,14 +138,48 @@ def warehouse(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUs
 
 
 @router.get("/supplier-grns")
-def list_supplier_grns(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)], limit: int = 200):
-    rows = db.query(SupplierGRN).order_by(SupplierGRN.id.desc()).limit(limit).all()
+def list_supplier_grns(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    q: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    """Supplier GRN line history, searchable and paginated.
+
+    A single bulk upload creates ONE grn_id shared across thousands of
+    lines, so browsing/fixing individual lines needs search + paging here
+    — the same way Product Master works — rather than only being able to
+    delete an entire GRN (which could mean thousands of lines) at once.
+    """
+    query = db.query(SupplierGRN)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            (SupplierGRN.barcode.ilike(like)) | (SupplierGRN.name.ilike(like)) | (SupplierGRN.grn_id.ilike(like))
+        )
+    rows = query.order_by(SupplierGRN.id.desc()).offset(offset).limit(limit).all()
     data = [{
-        "GRNID": r.grn_id, "Date": r.date, "Supplier": r.supplier, "InvoiceNo": r.invoice_no,
+        "id": r.id, "GRNID": r.grn_id, "Date": r.date, "Supplier": r.supplier, "InvoiceNo": r.invoice_no,
         "Barcode": r.barcode, "Name": r.name, "Qty": r.qty, "UnitCost": r.unit_cost,
         "TotalCost": r.total_cost, "Notes": r.notes or "",
     } for r in rows]
     return {"ok": True, "status": "ok", "data": data}
+
+
+@router.get("/supplier-grns/count")
+def count_supplier_grns(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    q: Optional[str] = None,
+):
+    query = db.query(SupplierGRN)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            (SupplierGRN.barcode.ilike(like)) | (SupplierGRN.name.ilike(like)) | (SupplierGRN.grn_id.ilike(like))
+        )
+    return {"ok": True, "count": query.count()}
 
 
 @router.get("/store-grns")
@@ -354,6 +388,55 @@ def delete_supplier_grn(grn_id: str, db: Annotated[Session, Depends(get_db)], us
 
     db.commit()
     return {"ok": True, "status": "ok", "deleted": len(grn_rows), "grnId": grn_id}
+
+
+@router.delete("/supplier-grn-line/{line_id}")
+def delete_supplier_grn_line(line_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Delete ONE Supplier GRN line (not the whole GRN it belongs to) and
+    reverse just that line's effect on HO Warehouse stock. This is what
+    fixes a single bad row (e.g. a stray 'Grand Total' row from a pivot
+    table export) without touching the thousands of correct lines that
+    share the same GRN ID from one bulk upload.
+    """
+    row = db.query(SupplierGRN).filter(SupplierGRN.id == line_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="GRN line not found")
+    wh = db.query(HOWarehouse).filter(HOWarehouse.barcode == row.barcode).first()
+    if wh:
+        wh.supplier_in = max(0, (wh.supplier_in or 0) - int(row.qty or 0))
+        wh.recalc()
+        wh.updated_at = datetime.utcnow()
+    db.delete(row)
+    db.commit()
+    return {"ok": True, "status": "ok", "deleted": 1}
+
+
+@router.post("/supplier-grn-lines/bulk-delete")
+def bulk_delete_supplier_grn_lines(line_ids: list[int], db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)]):
+    """Delete many Supplier GRN lines at once (e.g. from 'Select All
+    Matching' in the History table), reversing each one's HO Warehouse
+    effect. Processed in memory-bounded chunks like the other bulk
+    operations, so this stays safe even for thousands of ids.
+    """
+    deleted = 0
+    for i in range(0, len(line_ids), GRN_CHUNK_SIZE):
+        chunk_ids = line_ids[i:i + GRN_CHUNK_SIZE]
+        rows = db.query(SupplierGRN).filter(SupplierGRN.id.in_(chunk_ids)).all()
+        if not rows:
+            continue
+        barcodes = list({r.barcode for r in rows})
+        wh_by_barcode = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+        for r in rows:
+            wh = wh_by_barcode.get(r.barcode)
+            if wh:
+                wh.supplier_in = max(0, (wh.supplier_in or 0) - int(r.qty or 0))
+                wh.recalc()
+                wh.updated_at = datetime.utcnow()
+            db.delete(r)
+            deleted += 1
+        db.commit()
+        db.expunge_all()
+    return {"ok": True, "status": "ok", "deleted": deleted}
 
 
 @router.post("/store-grn")

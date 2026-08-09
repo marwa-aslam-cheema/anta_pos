@@ -84,11 +84,11 @@ async function pinSubmit(){
 }
 function show(name){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));const s=$('screen-'+name);if(s)s.classList.add('active');document.querySelectorAll('.nav-item').forEach(n=>{if(n.getAttribute('onclick')&&n.getAttribute('onclick').includes("'"+name+"'"))n.classList.add('active');});const titles={dashboard:'HO Dashboard','stores-view':'All Stores',warehouse:'HO Warehouse','supplier-grn':'Supplier GRN','store-grn':'Send Stock to Stores',transfer:'Stock Transfer',products:'Product Master',pl:'P&L Summary','expenses-ho':'Expenses',reports:'Sales Reports','inventory-ho':'Inventory — All Stores','stores-admin':'Manage Stores',users:'Users & PINs',banks:'Banks & Payments',settings:'Settings','balance-sheet':'Balance Sheet',cashflow:'Cash Flow','supplier-accounts':'Supplier Accounts',capital:'Capital & Equity'};if($('screen-title'))$('screen-title').textContent=titles[name]||name;
 if(name==='dashboard')renderDash();if(name==='stores-view')renderStoresView();if(name==='warehouse')renderWarehouse();
-if(name==='supplier-grn'){renderSGRNHist();if($('sgrn-date'))$('sgrn-date').value=today();if($('sgrn-id'))$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);}
+if(name==='supplier-grn'){sgrnHistCurrentPage=1;fetchAndRenderSGRNHist();if($('sgrn-date'))$('sgrn-date').value=today();if($('sgrn-id'))$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);}
 if(name==='store-grn'){renderStGRNTables();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
 if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products'){prodCurrentPage=1;fetchAndRenderProductsPage();}
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
-if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho')renderInvAll();
+if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho'){populateStoreSelects('recalc-store');renderInvAll();}
 if(name==='stores-admin')renderStoresAdmin();if(name==='users'){renderUsers();populateStoreSelects('u-store');}if(name==='banks')renderBanks();
 if(name==='settings'&&$('api-url'))$('api-url').value=CFG.apiUrl;
 if(name==='balance-sheet'){if($('bs-date'))$('bs-date').value=today();loadBalanceSheet();}
@@ -151,14 +151,24 @@ async function removeCategory(name){
   if(res&&res.ok){DATA.categories=res.categories;renderCategoryOptions();toast('Category removed');}
   else toast('❌ '+((res&&res.msg)||'Failed'),'error');
 }
-function populateStoreSelects(id){const ids=id?[id]:['stgrn-store','tr-from','tr-to','pl-store','rpt-store','exp-store-filter','u-store','bs-store'];const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];ids.forEach(selId=>{const el=$(selId);if(!el)return;const hasAll=!['stgrn-store','tr-from','tr-to','u-store'].includes(selId);el.innerHTML=(hasAll?'<option value="all">All Stores</option>':'')+stores.map(s=>`<option value="${s.StoreID}">${s.Name}</option>`).join('');});}
+function populateStoreSelects(id){const ids=id?[id]:['stgrn-store','tr-from','tr-to','pl-store','rpt-store','exp-store-filter','u-store','bs-store','recalc-store'];const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];ids.forEach(selId=>{const el=$(selId);if(!el)return;const hasAll=!['stgrn-store','tr-from','tr-to','u-store','recalc-store'].includes(selId);el.innerHTML=(hasAll?'<option value="all">All Stores</option>':'')+stores.map(s=>`<option value="${s.StoreID}">${s.Name}</option>`).join('');});}
 function renderDash(){const d=DATA.dashboard;const set=(id,v)=>{const el=$(id);if(el)el.textContent=v;};if(d){set('d-rev',fmt(d.totalRevenue||0));set('d-inv',d.totalInvoices||0);set('d-net',fmt(d.netRevenue||0));set('d-atv',fmt(d.atv||0));set('d-ret',fmt(d.totalReturns||0));set('d-ret-pct',d.totalRevenue?(d.totalReturns/d.totalRevenue*100).toFixed(1)+'% return rate':'0%');set('d-ho-stock',DATA.warehouse.filter(w=>(+w.OnHand||0)>0).length);
 const pm=d.paymentBreakdown||{},totR=d.totalRevenue||1;if($('d-pay'))$('d-pay').innerHTML=Object.entries(pm).map(([m,v])=>{const pct=Math.round(v/totR*100);return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px"><span>${m}</span><span class="fw7">${fmt(v)} (${pct}%)</span></div><div style="background:var(--gray1);border-radius:4px;height:7px"><div style="background:var(--accent2);width:${pct}%;height:100%;border-radius:4px"></div></div></div>`;}).join('')||'<div style="color:var(--gray3);font-size:11px;padding:14px;text-align:center">Load data first</div>';
 if($('d-low'))$('d-low').innerHTML=(d.lowStock||[]).slice(0,8).map(i=>`<tr><td style="font-size:11px">${i.store||'—'}</td><td class="fw7" style="font-size:11px">${String(i.name||i.barcode||'').slice(0,28)}</td><td style="font-weight:800;color:${+i.onHand<=0?'var(--red)':'var(--amber)'}">${i.onHand}</td><td><button class="btn btn-green btn-sm" onclick="show('store-grn')">📦</button></td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--gray3);padding:14px">No alerts</td></tr>';}
 const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];
 const sb=DATA.dashboard?.storeBreakdown||[];if($('store-cards'))$('store-cards').innerHTML=stores.map(s=>{const b=sb.find(x=>x.store===s.Name||x.store===s.StoreID||x.name===s.Name);return`<div class="store-card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><div style="font-weight:800;color:var(--navy)">${s.Name}</div><span class="badge ${b?'badge-green':'badge-gray'}">${b?'✅ Live':'No Data'}</span></div>${b?`<div class="store-kpis"><div class="store-kpi"><div class="store-kpi-label">Revenue</div><div class="store-kpi-value">${fmt(b.revenue||0)}</div></div><div class="store-kpi"><div class="store-kpi-label">Invoices</div><div class="store-kpi-value">${b.invoices||0}</div></div><div class="store-kpi"><div class="store-kpi-label">Returns</div><div class="store-kpi-value">${fmt(b.returns||0)}</div></div><div class="store-kpi"><div class="store-kpi-label">Net</div><div class="store-kpi-value">${fmt((b.revenue||0)-(b.returns||0))}</div></div></div>`:'<div style="text-align:center;padding:16px;color:var(--gray3);font-size:12px">No data</div>'}</div>`;}).join('');}
 function renderStoresView(){const sb=DATA.dashboard?.storeBreakdown||[];const stores=DATA.stores.filter(s=>s.StoreID!=='HO');const rows=stores.map(s=>{const b=sb.find(x=>x.store===s.Name||x.store===s.StoreID)||{revenue:0,invoices:0,returns:0};return{name:s.Name,rev:b.revenue||0,inv:b.invoices||0,ret:b.returns||0,net:(b.revenue||0)-(b.returns||0),atv:b.invoices?b.revenue/b.invoices:0,retPct:b.revenue?b.returns/b.revenue*100:0};}).sort((a,b)=>b.rev-a.rev);const maxR=Math.max(...rows.map(r=>r.rev),1);if($('sv-table'))$('sv-table').innerHTML=rows.map((r,i)=>`<tr><td class="fw7">${i+1}</td><td class="fw7">${r.name}</td><td>${fmt(r.rev)}</td><td>${r.inv}</td><td>${fmt(r.atv)}</td><td class="text-red">${fmt(r.ret)}</td><td>${r.retPct.toFixed(1)}%</td><td class="fw7">${fmt(r.net)}</td><td><span class="badge ${r.rev>0?'badge-green':'badge-gray'}">${r.rev>0?'Active':'No Data'}</span></td></tr>`).join('');}
-function renderWarehouse(){const search=(($('wh-search')||{}).value||'').toLowerCase();const data=DATA.warehouse.filter(w=>!search||(w.Name||'').toLowerCase().includes(search)||String(w.Barcode).includes(search));if($('wh-table'))$('wh-table').innerHTML=data.map(w=>{const oh=+w.OnHand||0;return`<tr><td style="font-family:monospace;font-size:10px">${w.Barcode}</td><td class="fw7">${w.Name}</td><td>${w.Brand||'—'}</td><td class="text-green">${w.Supplier_In||0}</td><td class="text-red">${w.Store_Out||0}</td><td style="font-weight:800;color:${oh<=0?'var(--red)':oh<=5?'var(--amber)':'var(--navy)'}">${oh}</td><td><button class="btn btn-primary btn-sm" onclick="show('store-grn')">Send</button></td></tr>`;}).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:18px">No warehouse data</td></tr>';}
+function renderWarehouse(){const search=(($('wh-search')||{}).value||'').toLowerCase();const data=DATA.warehouse.filter(w=>!search||(w.Name||'').toLowerCase().includes(search)||String(w.Barcode).includes(search));if($('wh-table'))$('wh-table').innerHTML=data.map(w=>{const oh=+w.OnHand||0;return`<tr><td style="font-family:monospace;font-size:10px">${w.Barcode}</td><td class="fw7">${w.Name}</td><td>${w.Brand||'—'}</td><td class="text-green">${w.Supplier_In||0}</td><td class="text-red">${w.Store_Out||0}</td><td style="font-weight:800;color:${oh<=0?'var(--red)':oh<=5?'var(--amber)':'var(--navy)'}">${oh}</td><td><button class="btn btn-primary btn-sm" onclick="sendToStore('${w.Barcode}','${(w.Name||'').replace(/'/g,"\\'")}',${oh})">Send</button></td></tr>`;}).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:18px">No warehouse data</td></tr>';}
+function sendToStore(barcode,name,hoStock){
+  // "Send" from HO Warehouse jumps to Send-to-Stores and pre-fills THIS
+  // product's line, instead of dropping you on an empty form you have to
+  // fill in again from scratch. Manually opening the screen and adding
+  // lines yourself (the normal "Add Line" flow) still works exactly as
+  // before — this is only triggered by the per-row Send button.
+  stgrnLines=[{barcode,name,qty:1,hoStock:+hoStock||0}];
+  show('store-grn');
+  renderStGRNLines();
+}
 function addSGRNLine(){sgrnLines.push({barcode:'',name:'',qty:1,cost:0});renderSGRNLines();}
 function renderSGRNLines(){if(!$('sgrn-lines'))return;$('sgrn-lines').innerHTML=sgrnLines.map((l,i)=>`<tr><td><input class="form-input" style="width:130px;padding:4px 7px;font-size:11px" value="${l.barcode}" oninput="sgrnBC(${i},this.value)"></td><td><input class="form-input" style="padding:4px 7px;font-size:11px" value="${l.name}" oninput="sgrnLines[${i}].name=this.value"></td><td><input class="form-input" type="number" style="width:70px;padding:4px 7px" value="${l.qty}" oninput="sgrnLines[${i}].qty=+this.value;calcSGRN()"></td><td><input class="form-input" type="number" style="width:90px;padding:4px 7px" value="${l.cost}" oninput="sgrnLines[${i}].cost=+this.value;calcSGRN()"></td><td><button class="btn btn-ghost btn-sm" onclick="sgrnLines.splice(${i},1);renderSGRNLines()">✕</button></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--gray3);padding:13px">Add lines</td></tr>';calcSGRN();}
 let _sgrnBCDebounce=null;
@@ -202,7 +212,7 @@ async function saveSGRN(){
   if(saved){
     toast(`✅ GRN ${grnId} — ${saved} item(s) saved`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
     sgrnLines=[];renderSGRNLines();$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);
-    await loadAll();renderSGRNHist();
+    await loadAll();sgrnHistCurrentPage=1;await fetchAndRenderSGRNHist();
   } else {
     toast('❌ GRN save failed — 0 items saved. Check the downloaded log for the reason.','error');
   }
@@ -212,10 +222,94 @@ async function saveSGRN(){
 async function deleteSupplierGRN(grnId){
   if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
   const res=await api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
-  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderSGRNHist();}
+  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();await fetchAndRenderSGRNHist();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
-function renderSGRNHist(){if($('sgrn-hist'))$('sgrn-hist').innerHTML=DATA.supplierGRNs.slice(0,30).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.Supplier}</td><td>${g.InvoiceNo||'—'}</td><td>${(g.Name||'').slice(0,28)}</td><td>${g.Qty}</td><td>${fmt(g.UnitCost||0)}</td><td><button class="btn btn-ghost btn-sm" onclick="deleteSupplierGRN('${g.GRNID}')" title="Delete this GRN — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:13px">No GRNs</td></tr>';}
+let sgrnHistPageSize=20,sgrnHistCurrentPage=1,sgrnHistSearchQuery='',sgrnHistPageItems=[],sgrnHistTotalCount=0;
+let selectedGrnLines=new Set();
+async function fetchAndRenderSGRNHist(){
+  const offset=(sgrnHistCurrentPage-1)*sgrnHistPageSize;
+  const qs=new URLSearchParams({limit:String(sgrnHistPageSize),offset:String(offset)});
+  if(sgrnHistSearchQuery)qs.set('q',sgrnHistSearchQuery);
+  const countQs=new URLSearchParams();if(sgrnHistSearchQuery)countQs.set('q',sgrnHistSearchQuery);
+  if($('sgrn-hist'))$('sgrn-hist').innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">⏳ Loading…</td></tr>';
+  try{
+    const [rowsRes,countRes]=await Promise.all([
+      api('/api/ho/supplier-grns?'+qs.toString()),
+      api('/api/ho/supplier-grns/count?'+countQs.toString()),
+    ]);
+    sgrnHistPageItems=(rowsRes&&rowsRes.data)?rowsRes.data:[];
+    sgrnHistTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:sgrnHistPageItems.length;
+  }catch(_e){sgrnHistPageItems=[];sgrnHistTotalCount=0;toast('❌ Failed to load GRN history','error');}
+  renderSGRNHistTable();
+  renderSGRNHistPagination();
+}
+function renderSGRNHistTable(){
+  if($('sgrn-hist'))$('sgrn-hist').innerHTML=sgrnHistPageItems.map(g=>{
+    const checked=selectedGrnLines.has(g.id)?'checked':'';
+    return `<tr><td><input type="checkbox" ${checked} onchange="toggleGrnLine(${g.id})"></td><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.Supplier}</td><td>${g.InvoiceNo||'—'}</td><td>${(g.Name||'').slice(0,28)}</td><td>${g.Qty}</td><td>${fmt(g.UnitCost||0)}</td><td><button class="btn btn-ghost btn-sm" onclick="deleteSupplierGRNLine(${g.id})" title="Delete this line only — reverses just this line's stock">🗑</button></td></tr>`;
+  }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">No GRN lines</td></tr>';
+  const selAll=$('sgrn-hist-select-all');
+  if(selAll)selAll.checked=sgrnHistPageItems.length>0&&sgrnHistPageItems.every(g=>selectedGrnLines.has(g.id));
+  updateSgrnHistSelectedInfo();
+}
+function toggleGrnLine(id){if(selectedGrnLines.has(id))selectedGrnLines.delete(id);else selectedGrnLines.add(id);renderSGRNHistTable();}
+function toggleAllGrnLines(cb){
+  if(cb.checked)sgrnHistPageItems.forEach(g=>selectedGrnLines.add(g.id));
+  else sgrnHistPageItems.forEach(g=>selectedGrnLines.delete(g.id));
+  renderSGRNHistTable();
+}
+async function selectAllMatchingGrnLines(){
+  if(!sgrnHistTotalCount){toast('Nothing to select','warn');return;}
+  if(sgrnHistTotalCount>3000&&!confirm(`Select all ${sgrnHistTotalCount} matching line(s)? This fetches the full matching list once.`))return;
+  toast('⏳ Selecting all matching lines…','info');
+  const qs=new URLSearchParams({limit:String(sgrnHistTotalCount)});
+  if(sgrnHistSearchQuery)qs.set('q',sgrnHistSearchQuery);
+  const res=await api('/api/ho/supplier-grns?'+qs.toString());
+  if(res&&res.data){res.data.forEach(g=>selectedGrnLines.add(g.id));renderSGRNHistTable();toast(`✅ ${selectedGrnLines.size} line(s) selected`);}
+  else toast('❌ Failed to select all — try again','error');
+}
+function clearGrnLineSelection(){selectedGrnLines=new Set();renderSGRNHistTable();}
+function updateSgrnHistSelectedInfo(){
+  const el=$('sgrn-hist-selected-info');
+  if(!el)return;
+  el.textContent=selectedGrnLines.size?`✅ ${selectedGrnLines.size} line(s) selected · ${sgrnHistTotalCount} total match`:`${sgrnHistTotalCount} line(s) total`;
+}
+async function deleteSupplierGRNLine(id){
+  if(!confirm('Delete this GRN line? This reverses its qty from HO Warehouse stock.'))return;
+  const res=await api('/api/ho/supplier-grn-line/'+id,{method:'DELETE'});
+  if(res&&res.ok){toast('🗑️ Deleted');selectedGrnLines.delete(id);await loadAll();await fetchAndRenderSGRNHist();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+}
+async function deleteSelectedGrnLines(){
+  if(!selectedGrnLines.size){toast('No lines selected','error');return;}
+  if(!confirm(`Delete ${selectedGrnLines.size} selected GRN line(s)? This reverses their qty from HO Warehouse stock. This cannot be undone.`))return;
+  const res=await api('/api/ho/supplier-grn-lines/bulk-delete',{method:'POST',body:Array.from(selectedGrnLines)});
+  if(res&&res.ok){toast(`🗑️ Deleted ${res.deleted} line(s)`);selectedGrnLines=new Set();await loadAll();await fetchAndRenderSGRNHist();}
+  else toast('❌ Delete failed','error');
+}
+let sgrnHistSearchDebounce=null;
+function searchSGRNHist(query){
+  clearTimeout(sgrnHistSearchDebounce);
+  sgrnHistSearchDebounce=setTimeout(()=>{sgrnHistSearchQuery=String(query||'').trim();sgrnHistCurrentPage=1;fetchAndRenderSGRNHist();},180);
+}
+function clearSGRNHistSearch(){
+  clearTimeout(sgrnHistSearchDebounce);
+  if($('sgrn-hist-search'))$('sgrn-hist-search').value='';
+  sgrnHistSearchQuery='';sgrnHistCurrentPage=1;fetchAndRenderSGRNHist();
+}
+function renderSGRNHistPagination(){
+  const container=$('sgrn-hist-pagination');
+  if(!container)return;
+  const totalPages=Math.max(1,Math.ceil(sgrnHistTotalCount/sgrnHistPageSize));
+  sgrnHistCurrentPage=Math.max(1,Math.min(sgrnHistCurrentPage,totalPages));
+  let html='<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">';
+  if(sgrnHistCurrentPage>1)html+=`<button class="btn btn-ghost btn-sm" onclick="sgrnHistCurrentPage--;fetchAndRenderSGRNHist()">← Previous</button>`;
+  html+=`<span style="font-size:11px;color:var(--gray4)">Page ${sgrnHistCurrentPage} of ${totalPages}</span>`;
+  if(sgrnHistCurrentPage<totalPages)html+=`<button class="btn btn-ghost btn-sm" onclick="sgrnHistCurrentPage++;fetchAndRenderSGRNHist()">Next →</button>`;
+  html+='</div>';
+  container.innerHTML=html;
+}
 function downloadSGRNTemplate(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty,UnitCost\n8001000000001,ANTA Running Pro,20,120\n'],{type:'text/csv'}));a.download='supplier_grn_template.csv';a.click();}
 async function uploadSGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>sgrnLines.push({barcode:String(r.Barcode||'').trim(),name:String(r.Name||'').trim(),qty:+(r.Qty||1),cost:+(r.UnitCost||r.Cost||0)}));renderSGRNLines();toast('✅ '+rows.length+' lines');}
 function dropSGRN(e){e.preventDefault();if(e.dataTransfer.files[0])uploadSGRN(e.dataTransfer.files[0]);}
@@ -634,6 +728,16 @@ async function loadExpenses(){const el=$('exp-ho-table')||$('exp-table');if(!el)
 function rptPreset(){const p=($('rpt-preset')||{}).value||'today',d=today(),now=new Date();if(!$('rpt-from'))return;if(p==='today'){$('rpt-from').value=d;$('rpt-to').value=d;}else if(p==='yesterday'){const y=new Date(now);y.setDate(y.getDate()-1);const yd=y.toISOString().split('T')[0];$('rpt-from').value=yd;$('rpt-to').value=yd;}else if(p==='week'){const ws=new Date(now);ws.setDate(now.getDate()-now.getDay());$('rpt-from').value=ws.toISOString().split('T')[0];$('rpt-to').value=d;}else{$('rpt-from').value=d.slice(0,7)+'-01';$('rpt-to').value=d;}}
 async function loadReports(){const qs=new URLSearchParams();if($('rpt-from')?.value)qs.set('from',$('rpt-from').value);if($('rpt-to')?.value)qs.set('to',$('rpt-to').value);if($('rpt-store')?.value&&$('rpt-store').value!=='all')qs.set('store',$('rpt-store').value);const res=await api('/api/reports?'+qs);if(!res||!res.ok){toast('Report failed','error');return;}window.__lastReport=res;if($('rpt-kpis'))$('rpt-kpis').innerHTML=[['Revenue',fmt(res.revenue),''],['Net',fmt(res.net),'blue'],['Invoices',res.invoices,'green'],['ATV',fmt(res.atv),'amber'],['Units',res.units,'purple'],['Cost',fmt(res.totalCost||0),''],['Profit',fmt(res.totalProfit||0),'green'],['Margin',(res.margin||0)+'%','teal'],['Returns',fmt(res.returns),'']].map(([l,v,c])=>`<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');const pm=res.paymentBreakdown||{},rev=res.revenue||0;if($('rpt-pay'))$('rpt-pay').innerHTML=Object.entries(pm).map(([m,v])=>{const pct=rev?Math.round(v/rev*100):0;return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px"><span>${m}</span><span class="fw7">${fmt(v)} (${pct}%)</span></div><div style="background:var(--gray1);border-radius:4px;height:7px"><div style="background:var(--accent2);width:${pct}%;height:100%;border-radius:4px"></div></div></div>`;}).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-prod'))$('rpt-prod').innerHTML=(res.productBreakdown||[]).map(p=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--gray1);font-size:11px"><span class="fw7">${p.name}</span><span>${p.qty} · ${fmt(p.revenue)}</span></div>`).join('')||'<div style="color:var(--gray3);padding:14px;text-align:center">No data</div>';if($('rpt-txns'))$('rpt-txns').innerHTML=(res.transactions||[]).slice(0,150).map(x=>`<tr><td class="fw7">${x.id}</td><td>${x.date||''}</td><td>${x.time||''}</td><td>${x.store||''}</td><td>${x.customer||''}</td><td style="text-align:center">${x.items||0}</td><td style="text-align:center">${x.units||0}</td><td style="font-size:10px;max-width:220px">${x.productList||''}</td><td>${fmt(x.subtotal||0)}</td><td>${fmt(x.discount||0)}</td><td>${fmt(x.cost||0)}</td><td class="fw7" style="color:var(--green)">${fmt(x.profit||0)}</td><td>${x.margin||0}%</td><td>${x.payment||''}</td><td>${x.payRef||''}</td><td class="fw7">${fmt(x.total||0)}</td></tr>`).join('')||'<tr><td colspan="16" style="text-align:center;color:var(--gray3);padding:14px">None</td></tr>';}
 function exportRpt(){const rows=(window.__lastReport&&window.__lastReport.transactions)||[];const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};const header=['Invoice','Date','Time','Store','Customer','Items','Units','Products','Subtotal','Discount','Cost','Profit','Margin%','Payment','Ref','Total'];const csv=[header.join(',')].concat(rows.map(x=>[x.id,x.date,x.time,x.store,x.customer,x.items,x.units,x.productList,x.subtotal,x.discount,x.cost,x.profit,x.margin,x.payment,x.payRef,x.total].map(esc).join(','))).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='anta_ho_report_'+today()+'.csv';a.click();}
+async function recalculateStoreInventory(){
+  const storeId=$('recalc-store')&&$('recalc-store').value;
+  if(!storeId){toast('Select a store','error');return;}
+  const storeName=(DATA.stores.find(s=>s.StoreID===storeId)||{}).Name||storeId;
+  if(!confirm(`Recalculate stock for ${storeName}? This rebuilds it strictly from actually-received GRN history — sales/returns/exchanges are untouched. Safe, but do this once you're sure the store's GRN history is correct.`))return;
+  toast('⏳ Recalculating…','info');
+  const res=await api('/api/inventory/recalculate?store_id='+encodeURIComponent(storeId),{method:'POST'});
+  if(res&&res.ok){toast(`✅ Fixed — ${res.updated} product(s) corrected for ${storeName}`);renderInvAll();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Recalculate failed'),'error');
+}
 async function renderInvAll(){const res=await api('/api/ho/inventory-all');const el=$('inv-all-table')||$('inv-ho-table');if(!el)return;if(!res||!res.data){el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:14px">No data</td></tr>';return;}const stores=res.stores||[];el.innerHTML=res.data.map(r=>`<tr><td style="font-family:monospace;font-size:10px">${r.barcode}</td><td class="fw7">${r.name}</td><td>${r.ho}</td>${stores.map(s=>`<td style="text-align:center">${(r.stores&&r.stores[s.store_id])||0}</td>`).join('')}<td class="fw7">${r.total}</td></tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--gray3);padding:14px">Empty</td></tr>';}
 function renderStoresAdmin(){const el=$('stores-table')||$('stores-admin-table')||$('sa-table');if(!el)return;const rows=DATA.stores||[];el.innerHTML=rows.map(s=>`<tr><td class="fw7">${s.StoreID||s.store_id||''}</td><td>${s.Name||s.name||''}</td><td>${s.City||s.city||''}</td><td>${s.Manager||s.manager||''}</td><td>${s.Phone||s.phone||''}</td><td><span class="badge badge-green">${(s.Active==='N'||s.active===false)?'Inactive':'Active'}</span></td><td><button class="btn btn-ghost btn-sm" onclick="editStore('${s.StoreID||s.store_id||''}')">Edit</button></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:14px">No stores yet</td></tr>';}
 function showAddStore(){const f=$('store-form')||$('add-store-form');if(f)f.style.display='flex';['st-id','st-nm','st-city','st-addr','st-mgr','st-ph'].forEach(id=>{const el=$(id);if(el){el.value='';if(id==='st-id')el.disabled=false;}});} 

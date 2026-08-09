@@ -29,21 +29,26 @@ def get_or_create_inv(
             row.name = name
         return row
 
-    # Seed opening from product.opening once for this store
+    # NOTE: a store's inventory starts at 0, not at Product.opening.
+    # `opening` is the quantity entered in Product Master / bulk upload,
+    # which represents the HO Warehouse starting stock for that product
+    # (it already flows into HOWarehouse via set_ho_warehouse_qty). It is
+    # NOT a per-store quantity — a product having opening=24 does not mean
+    # every store secretly already has 24 units. A store should only ever
+    # show stock that was actually issued to it via a received GRN.
     prod = db.query(Product).filter(Product.barcode == str(barcode)).first()
-    opening = int(prod.opening or 0) if prod else 0
     row = Inventory(
         barcode=str(barcode),
         name=name or (prod.name if prod else ""),
         store=store,
         store_id=str(store_id),
-        grn_in=opening,  # opening stock counted as initial GRN_In
+        grn_in=0,
         sales_out=0,
         returns_in=0,
         exch_out=0,
         exch_in=0,
         claims=0,
-        on_hand=opening,
+        on_hand=0,
         updated_at=_now(),
     )
     db.add(row)
@@ -116,8 +121,11 @@ def get_stock(db: Session, barcode: str, store_id: str) -> int:
     )
     if row:
         return int(row.on_hand or 0)
-    prod = db.query(Product).filter(Product.barcode == str(barcode)).first()
-    return int(prod.opening or 0) if prod else 0
+    # No inventory row yet for this store = nothing has been received there
+    # yet. Product.opening is HO Warehouse's starting stock, not this
+    # store's — falling back to it here was the same bug as in
+    # get_or_create_inv above (see the note there).
+    return 0
 
 
 def update_ho_warehouse(db: Session, barcode: str, name: str, qty: int, direction: str) -> HOWarehouse:
