@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ANTA Shoes — POS v4</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#e5384d">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="stylesheet" href="/css/styles.css">
 <style>
 /* v4 enhancements */
@@ -61,7 +65,7 @@
   </div>
   <div class="sync-bar">
     <div class="dot offline" id="sync-dot"></div>
-    <div><div id="sync-label" style="font-size:10px">Connecting...</div><div id="sync-last" style="font-size:9px;opacity:.6">—</div></div>
+    <div><div id="sync-label" style="font-size:10px">Connecting...</div><div id="sync-last" style="font-size:9px;opacity:.6">—</div><div id="pending-sync-badge" style="display:none;font-size:9px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:6px;padding:2px 6px;margin-top:3px"></div></div>
   </div>
   <div class="user-bar">
     <div class="user-info"><span id="user-name">—</span><span class="user-role" id="user-role">—</span></div>
@@ -374,5 +378,12 @@
 
 
 <script src="/js/app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+</script>
 </body>
 </html>

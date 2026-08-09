@@ -316,6 +316,11 @@ async function reloadCatalog() {
       active: r.active === false || r.active === 'N' ? 'N' : 'Y',
     }));
     addLog('products', '✅ ' + DB.products.length);
+  } else if (!DB.products.length) {
+    // Couldn't reach the server AND nothing loaded yet this session —
+    // fall back to whatever was cached from the last successful load, so
+    // POS can still scan/sell instead of showing an empty catalog.
+    if (loadCatalogCache()) toast('📴 Offline — using last saved catalog', 'warn');
   }
   if (Array.isArray(banks)) {
     BANKS = banks.map((b) => ({
@@ -333,12 +338,14 @@ async function reloadCatalog() {
     DB.settings.policy = settings.policy || DB.settings.policy;
     DB.settings.currency = settings.currency || 'LYD';
   }
+  if (Array.isArray(prods) && DB.products.length) saveCatalogCache();
   // recent data
   await Promise.all([loadLocalSales(), loadLocalReturns()]);
   setOnline('online', 'Catalog ready');
   renderQuick();
   renderDash();
   toast(t('catalog_loaded') + ' (' + DB.products.length + ' products)');
+  updatePendingSyncBadge();
 }
 
 async function ensureStock() {
@@ -584,6 +591,97 @@ function calcChange() {
 function closePay() {
   document.getElementById('pay-modal').style.display = 'none';
 }
+/* ---------- OFFLINE SALES QUEUE ---------- */
+// If a sale can't reach the server (no internet, HO asleep, etc.) it's
+// saved locally instead of being lost or blocking the cashier. It's
+// queued, the sale completes normally on screen, and it's automatically
+// pushed to HO the moment connectivity comes back — either via the
+// browser's 'online' event or a periodic retry every 30s as a fallback.
+const PENDING_SALES_KEY = 'anta_pending_sales_v1';
+function getPendingSales() {
+  try { return JSON.parse(localStorage.getItem(PENDING_SALES_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function savePendingSales(arr) {
+  try { localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(arr)); } catch (e) {}
+  updatePendingSyncBadge();
+}
+function queuePendingSale(localId, payload) {
+  const arr = getPendingSales();
+  arr.push({ localId, payload, queuedAt: Date.now() });
+  savePendingSales(arr);
+}
+function updatePendingSyncBadge() {
+  const n = getPendingSales().length;
+  const el = document.getElementById('pending-sync-badge');
+  if (!el) return;
+  if (n > 0) {
+    el.style.display = 'block';
+    el.textContent = `⏳ ${n} sale(s) waiting to sync`;
+  } else {
+    el.style.display = 'none';
+  }
+}
+let _syncingPending = false;
+async function trySyncPendingSales() {
+  if (_syncingPending) return;
+  const queue = getPendingSales();
+  if (!queue.length) return;
+  _syncingPending = true;
+  try {
+    let synced = 0;
+    while (true) {
+      const queue2 = getPendingSales();
+      if (!queue2.length) break;
+      const item = queue2[0];
+      const res = await api('/api/sales', { method: 'POST', body: item.payload });
+      if (res && res.ok) {
+        // Success — drop it from the queue and reconcile the transaction's
+        // id in the local list (it was shown with a temporary LOCAL- id).
+        const remaining = getPendingSales().filter((q) => q.localId !== item.localId);
+        savePendingSales(remaining);
+        const txn = res.sale || { ...item.payload, id: res.id, synced: true };
+        const idx = DB.transactions.findIndex((t) => t.id === item.localId);
+        if (idx >= 0) DB.transactions[idx] = txn;
+        synced++;
+      } else {
+        // Still can't reach the server — stop here (keep order) and try
+        // again on the next 'online' event / periodic tick.
+        break;
+      }
+    }
+    if (synced) toast(`🔄 ${synced} offline sale(s) synced to HO`, 'ok');
+  } finally {
+    _syncingPending = false;
+  }
+}
+window.addEventListener('online', () => { setTimeout(trySyncPendingSales, 1500); });
+setInterval(trySyncPendingSales, 30000);
+
+/* ---------- OFFLINE CATALOG CACHE ---------- */
+// Keeps the last-known catalog/banks/settings on disk so POS can still
+// open, scan barcodes, and price a sale correctly even after a full page
+// reload with zero internet — not just mid-session.
+const CATALOG_CACHE_KEY = 'anta_catalog_cache_v1';
+function saveCatalogCache() {
+  try {
+    localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+      products: DB.products, banks: (typeof BANKS !== 'undefined' ? BANKS : []), settings: DB.settings, cachedAt: Date.now(),
+    }));
+  } catch (e) {}
+}
+function loadCatalogCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CATALOG_CACHE_KEY) || 'null');
+    if (raw && Array.isArray(raw.products) && raw.products.length) {
+      DB.products = raw.products;
+      if (raw.banks && raw.banks.length) { BANKS = raw.banks; populatePaySelects(); renderBanksList(); }
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 async function completeSale() {
   try { await refreshPromoPricing(); } catch(e) {}
   const { sub, da, total, disc } = calcCart();
@@ -619,12 +717,27 @@ async function completeSale() {
   };
   setOnline('syncing', 'Saving sale...');
   const res = await api('/api/sales', { method: 'POST', body: payload });
-  if (!res || !res.ok) {
+  let txn;
+  if (res && res.ok) {
+    // Normal online path.
+    txn = res.sale || { ...payload, id: res.id, synced: true };
+  } else if (res && res._http) {
+    // Server was reachable and REJECTED the sale (validation error, bad
+    // data, etc.) — this is a real problem, not a connectivity one, so
+    // the sale must NOT go through silently. Block it like before.
     toast(t('sale_failed') + ' ' + ((res && res.msg) || 'error'), 'error');
     setOnline('online', 'Sale error');
     return;
+  } else {
+    // Couldn't reach the server at all (offline, HO asleep, network
+    // drop). Don't lose the sale or block the cashier — complete it
+    // locally with a temporary id, queue it, and sync automatically the
+    // moment connectivity returns.
+    const localId = 'LOCAL-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    txn = { ...payload, id: localId, synced: false };
+    queuePendingSale(localId, payload);
+    toast('📴 Offline — sale saved locally, will sync automatically when online', 'warn');
   }
-  const txn = res.sale || { ...payload, id: res.id, synced: true };
   // local stock adjust
   (payload.items || []).forEach((i) => adjustLocalStock(i.barcode, -i.qty));
   DB.transactions.unshift(txn);
@@ -636,8 +749,8 @@ async function completeSale() {
   setVal('cust-name', '');
   renderCart();
   renderQuick();
-  addLog('sale', '✅ ' + txn.id);
-  setOnline('online', 'Sale saved');
+  addLog('sale', (txn.synced === false ? '📴 offline ' : '✅ ') + txn.id);
+  setOnline('online', txn.synced === false ? 'Sale saved offline' : 'Sale saved');
   toast(t('sale_complete') + ' ' + txn.id);
 }
 function showInvoice(txn) {
@@ -1162,6 +1275,8 @@ async function initApp() {
   } catch (e) {}
   updateQueueUI();
   populatePaySelects();
+  updatePendingSyncBadge();
+  if (navigator.onLine) setTimeout(trySyncPendingSales, 2000);
   const expDateEl = document.getElementById('exp-date');
   if (expDateEl) expDateEl.value = today();
   rptPreset();
