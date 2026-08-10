@@ -1122,17 +1122,20 @@ function showInvoice(txn) {
       </div>
 
       <div style="text-align:center;margin-top:16px;padding-top:12px;border-top:1.5px dashed #cbd5e1;font-size:10px;color:#94a3b8">
-        <div id="inv-qr" style="display:flex;justify-content:center;margin-bottom:6px"></div>
-        <div style="font-size:11px;color:#475569;font-weight:600">${txn.id}</div>
+        <svg id="inv-barcode" style="max-width:100%"></svg>
         <div style="margin-top:6px">${DB.settings.policy}</div>
         <div style="margin-top:6px;font-weight:600;color:#475569">Thank you for shopping with us! شكراً لزيارتكم</div>
       </div>
     </div>`;
   document.getElementById('inv-modal').style.display = 'flex';
-  const qrBox = document.getElementById('inv-qr');
-  if (qrBox && typeof QRCode !== 'undefined') {
-    qrBox.innerHTML = '';
-    try { new QRCode(qrBox, { text: String(txn.id || ''), width: 96, height: 96, correctLevel: QRCode.CorrectLevel.M }); } catch (e) {}
+  const barEl = document.getElementById('inv-barcode');
+  if (barEl && typeof JsBarcode !== 'undefined') {
+    try {
+      JsBarcode(barEl, String(txn.id || ''), {
+        format: 'CODE128', width: 2, height: 55, displayValue: true,
+        fontSize: 13, margin: 4, background: 'transparent', lineColor: '#0f172a',
+      });
+    } catch (e) {}
   }
 }
 
