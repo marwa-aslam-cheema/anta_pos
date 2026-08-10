@@ -155,7 +155,8 @@ def reports(
         txn_cost = 0.0
         item_names = []
         for i in items:
-            name = i.get("name") or i.get("barcode") or "?"
+            barcode = i.get("barcode") or ""
+            name = i.get("name") or barcode or "?"
             qty = int(i.get("qty") or 0)
             price = float(i.get("price") or 0)
             cost = float(i.get("cost") or 0)
@@ -164,12 +165,13 @@ def reports(
             txn_units += qty
             txn_cost += cost * qty
             item_names.append(f"{name} x{qty}")
-            if name not in prod_map:
-                prod_map[name] = {"name": name, "qty": 0, "revenue": 0, "cost": 0, "profit": 0}
-            prod_map[name]["qty"] += qty
-            prod_map[name]["revenue"] += lt
-            prod_map[name]["cost"] += cost * qty
-            prod_map[name]["profit"] += lt - cost * qty
+            key = barcode or name
+            if key not in prod_map:
+                prod_map[key] = {"barcode": barcode, "name": name, "qty": 0, "revenue": 0, "cost": 0, "profit": 0}
+            prod_map[key]["qty"] += qty
+            prod_map[key]["revenue"] += lt
+            prod_map[key]["cost"] += cost * qty
+            prod_map[key]["profit"] += lt - cost * qty
         line_disc = float(s.discount or 0) + float(s.global_discount or 0)
         gross = float(s.total or 0)
         profit = gross - txn_cost

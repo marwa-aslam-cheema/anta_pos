@@ -548,6 +548,16 @@ async function sendSalesReport(via, recipients) {
     .concat(txns.map((t) => [t.id, t.time, t.customer, t.items, t.units, t.payment, t.total]));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summarySheet), 'Summary');
+  const roleForExport = (USER && USER.role) || 'cashier';
+  const canSeeProfitExport = roleForExport === 'admin' || roleForExport === 'accountant';
+  const items = (res && res.productBreakdown) || [];
+  const itemsHeader = canSeeProfitExport ? ['Barcode', 'Product', 'Qty', 'Revenue', 'Cost', 'Profit'] : ['Barcode', 'Product', 'Qty', 'Revenue'];
+  const itemsSheet = [itemsHeader].concat(
+    items.map((p) => canSeeProfitExport
+      ? [p.barcode, p.name, p.qty, p.revenue, p.cost, p.profit]
+      : [p.barcode, p.name, p.qty, p.revenue])
+  );
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(itemsSheet), 'Items Sold');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(txnSheet), 'Transactions');
   XLSX.writeFile(wb, 'sales_report_' + storeName.replace(/[^a-z0-9]/gi, '_') + '_' + todayStr + '.xlsx');
 
@@ -569,51 +579,67 @@ async function sendSalesReport(via, recipients) {
   }
 }
 async function renderDash() {
-  const res = await api('/api/dashboard');
-  if (!res || !res.ok) {
-    // fallback local
+  const todayStr = new Date().toISOString().slice(0, 10);
+  // Use the SAME endpoint the Reports screen uses for the numbers, so
+  // the dashboard can never disagree with Reports — that mismatch was
+  // the bug. /api/dashboard is only used afterward, for low-stock (which
+  // Reports doesn't provide).
+  const rpt = await api('/api/reports?from=' + todayStr + '&to=' + todayStr);
+  if (rpt && rpt.ok) {
+    const d = today();
+    const retCount = DB.returns.filter((r) => r.date === d).length;
+    const pm = rpt.paymentBreakdown || {};
+    const cashAmt = pm['Cash'] || 0;
+    document.getElementById('d-sales').textContent = fmt(rpt.revenue || 0);
+    document.getElementById('d-inv').textContent = (rpt.invoices || 0) + ' invoices';
+    document.getElementById('d-net').textContent = fmt(rpt.net || 0);
+    document.getElementById('d-qty').textContent = rpt.units || 0;
+    document.getElementById('d-atv').textContent = fmt(rpt.atv || 0);
+    document.getElementById('d-ret').textContent = fmt(rpt.returns || 0);
+    document.getElementById('d-retc').textContent = retCount + ' returns';
+    document.getElementById('d-cash').textContent = fmt(cashAmt);
+    const recent = (rpt.transactions || []).slice(0, 7);
+    document.getElementById('d-txns').innerHTML =
+      recent.map((t) => `<tr><td class="fw7">${t.id}</td><td>${t.time || ''}</td><td>${t.customer || ''}</td><td>${t.payment || ''}</td><td class="fw7">${fmt(t.total || 0)}</td></tr>`).join('') ||
+      '<tr><td colspan="5" style="text-align:center;color:var(--gray3);padding:14px">No sales yet</td></tr>';
+  } else {
+    // Couldn't reach the server at all — compute from what's already
+    // loaded locally, so the dashboard shows real numbers instead of
+    // zeros baked into the HTML.
     const d = today();
     const tt = DB.transactions.filter((t) => t.date === d);
     const ts = tt.reduce((s, t) => s + (+t.total || 0), 0);
+    const cashTs = tt.filter((t) => (t.payment || '') === 'Cash').reduce((s, t) => s + (+t.total || 0), 0);
+    let qty = 0;
+    tt.forEach((t) => { (t.items || []).forEach((i) => { qty += +i.qty || 0; }); });
+    const retToday = DB.returns.filter((r) => r.date === d).reduce((s, r) => s + (+r.amount || 0), 0);
     document.getElementById('d-sales').textContent = fmt(ts);
-    return;
+    document.getElementById('d-inv').textContent = tt.length + ' invoices';
+    document.getElementById('d-net').textContent = fmt(ts - retToday);
+    document.getElementById('d-qty').textContent = qty;
+    document.getElementById('d-atv').textContent = fmt(tt.length ? ts / tt.length : 0);
+    document.getElementById('d-ret').textContent = fmt(retToday);
+    document.getElementById('d-retc').textContent = DB.returns.filter((r) => r.date === d).length + ' returns';
+    document.getElementById('d-cash').textContent = fmt(cashTs);
+    const recent = DB.transactions.slice(0, 7);
+    document.getElementById('d-txns').innerHTML =
+      recent.map((t) => `<tr><td class="fw7">${t.id}</td><td>${t.time || ''}</td><td>${t.customer || ''}</td><td>${t.payment || ''}</td><td class="fw7">${fmt(t.total || 0)}</td></tr>`).join('') ||
+      '<tr><td colspan="5" style="text-align:center;color:var(--gray3);padding:14px">No sales yet</td></tr>';
   }
-  document.getElementById('d-sales').textContent = fmt(res.todayRevenue || 0);
-  document.getElementById('d-inv').textContent = (res.todayInvoices || 0) + ' invoices';
-  document.getElementById('d-net').textContent = fmt((res.todayRevenue || 0) - 0);
-  // Use broader KPIs where available
-  const retToday = DB.returns.filter((r) => r.date === today()).reduce((s, r) => s + (+r.amount || 0), 0);
-  document.getElementById('d-net').textContent = fmt((res.todayRevenue || 0) - retToday);
-  document.getElementById('d-qty').textContent = res.qtySold || 0;
-  document.getElementById('d-atv').textContent = fmt(
-    res.todayInvoices ? (res.todayRevenue || 0) / res.todayInvoices : 0
-  );
-  document.getElementById('d-ret').textContent = fmt(retToday);
-  document.getElementById('d-retc').textContent =
-    DB.returns.filter((r) => r.date === today()).length + ' returns';
-  document.getElementById('d-cash').textContent = fmt(res.cashToday || 0);
 
-  const low = res.lowStock || [];
-  document.getElementById('low-badge').textContent = low.length;
-  document.getElementById('d-low').innerHTML =
-    low
-      .slice(0, 5)
-      .map((p) => {
-        const s = p.onHand;
-        return `<div style="padding:5px 0;border-bottom:1px solid var(--gray1);display:flex;justify-content:space-between;font-size:11px"><span style="font-weight:600;flex:1">${(p.name || '').slice(0, 28)}</span><span class="badge ${s <= 0 ? 'badge-red' : 'badge-amber'}">${s <= 0 ? 'OUT' : s}</span></div>`;
-      })
-      .join('') || '<div style="color:var(--gray3);font-size:11px;padding:8px">All stock OK ✅</div>';
-
-  const recent = res.recentSales || DB.transactions.slice(0, 7);
-  document.getElementById('d-txns').innerHTML =
-    recent
-      .slice(0, 7)
-      .map(
-        (t) =>
-          `<tr><td class="fw7">${t.id}</td><td>${t.time || '—'}</td><td>${t.customer || ''}</td><td>${t.payment || ''}</td><td class="fw7">${fmt(t.total)}</td><td><span class="badge badge-green">DB</span></td></tr>`
-      )
-      .join('') ||
-    '<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:14px">No transactions yet</td></tr>';
+  const res = await api('/api/dashboard');
+  if (res && res.ok) {
+    const low = res.lowStock || [];
+    document.getElementById('low-badge').textContent = low.length;
+    document.getElementById('d-low').innerHTML =
+      low
+        .slice(0, 5)
+        .map((p) => {
+          const s = p.onHand;
+          return `<div style="padding:5px 0;border-bottom:1px solid var(--gray1);display:flex;justify-content:space-between;font-size:11px"><span style="font-weight:600;flex:1">${(p.name || '').slice(0, 28)}</span><span class="badge ${s <= 0 ? 'badge-red' : 'badge-amber'}">${s <= 0 ? 'OUT' : s}</span></div>`;
+        })
+        .join('') || '<div style="color:var(--gray3);font-size:11px;padding:8px">All stock OK ✅</div>';
+  }
 
   // queue UI legacy hide
   const qc = document.getElementById('q-count');
@@ -1382,17 +1408,20 @@ async function loadReports() {
     toast('Report load failed', 'warn');
     return;
   }
-  document.getElementById('rpt-kpis').innerHTML = [
+  const roleForProfit = (USER && USER.role) || 'cashier';
+  const canSeeProfitKpi = roleForProfit === 'admin' || roleForProfit === 'accountant';
+  const kpiRows = [
     ['Revenue', fmt(res.revenue), ''],
     ['Net', fmt(res.net), 'blue'],
     ['Invoices', res.invoices, 'green'],
     ['ATV', fmt(res.atv), 'amber'],
     ['Units', res.units, 'purple'],
-    ['Cost', fmt(res.totalCost||0), ''],
-    ['Profit', fmt(res.totalProfit||0), 'green'],
-    ['Margin', (res.margin||0)+'%', 'teal'],
     ['Returns', fmt(res.returns), ''],
-  ]
+  ];
+  if (canSeeProfitKpi) {
+    kpiRows.push(['Cost', fmt(res.totalCost||0), ''], ['Profit', fmt(res.totalProfit||0), 'green'], ['Margin', (res.margin||0)+'%', 'teal']);
+  }
+  document.getElementById('rpt-kpis').innerHTML = kpiRows
     .map(([l, v, c]) => `<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`)
     .join('');
 

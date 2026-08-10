@@ -151,7 +151,7 @@ async function removeCategory(name){
   if(res&&res.ok){DATA.categories=res.categories;renderCategoryOptions();toast('Category removed');}
   else toast('❌ '+((res&&res.msg)||'Failed'),'error');
 }
-function populateStoreSelects(id){const ids=id?[id]:['stgrn-store','tr-from','tr-to','pl-store','rpt-store','exp-store-filter','u-store','bs-store','recalc-store'];const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];ids.forEach(selId=>{const el=$(selId);if(!el)return;const hasAll=!['stgrn-store','tr-from','tr-to','u-store','recalc-store'].includes(selId);el.innerHTML=(hasAll?'<option value="all">All Stores</option>':'')+stores.map(s=>`<option value="${s.StoreID}">${s.Name}</option>`).join('');});}
+function populateStoreSelects(id){const ids=id?[id]:['stgrn-store','tr-from','tr-to','pl-store','rpt-store','exp-store-filter','u-store','bs-store','recalc-store'];const stores=DATA.stores.length?DATA.stores.filter(s=>s.StoreID!=='HO'):[{StoreID:'s1',Name:'Store 1 — Tripoli'},{StoreID:'s2',Name:'Store 2 — Benghazi'},{StoreID:'s3',Name:'Store 3 — Misrata'}];ids.forEach(selId=>{const el=$(selId);if(!el)return;const hasAll=!['stgrn-store','tr-from','tr-to','u-store','recalc-store'].includes(selId);const storeList=selId==='u-store'?[{StoreID:'HO',Name:'Head Office'},...stores]:stores;el.innerHTML=(hasAll?'<option value="all">All Stores</option>':'')+storeList.map(s=>`<option value="${s.StoreID}">${s.Name}</option>`).join('');});}
 function renderDash(){const d=DATA.dashboard;const set=(id,v)=>{const el=$(id);if(el)el.textContent=v;};if(d){set('d-rev',fmt(d.totalRevenue||0));set('d-inv',d.totalInvoices||0);set('d-net',fmt(d.netRevenue||0));set('d-atv',fmt(d.atv||0));set('d-ret',fmt(d.totalReturns||0));set('d-ret-pct',d.totalRevenue?(d.totalReturns/d.totalRevenue*100).toFixed(1)+'% return rate':'0%');set('d-ho-stock',DATA.warehouse.filter(w=>(+w.OnHand||0)>0).length);
 const pm=d.paymentBreakdown||{},totR=d.totalRevenue||1;if($('d-pay'))$('d-pay').innerHTML=Object.entries(pm).map(([m,v])=>{const pct=Math.round(v/totR*100);return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px"><span>${m}</span><span class="fw7">${fmt(v)} (${pct}%)</span></div><div style="background:var(--gray1);border-radius:4px;height:7px"><div style="background:var(--accent2);width:${pct}%;height:100%;border-radius:4px"></div></div></div>`;}).join('')||'<div style="color:var(--gray3);font-size:11px;padding:14px;text-align:center">Load data first</div>';
 if($('d-low'))$('d-low').innerHTML=(d.lowStock||[]).slice(0,8).map(i=>`<tr><td style="font-size:11px">${i.store||'—'}</td><td class="fw7" style="font-size:11px">${String(i.name||i.barcode||'').slice(0,28)}</td><td style="font-weight:800;color:${+i.onHand<=0?'var(--red)':'var(--amber)'}">${i.onHand}</td><td><button class="btn btn-green btn-sm" onclick="show('store-grn')">📦</button></td></tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--gray3);padding:14px">No alerts</td></tr>';}
@@ -909,10 +909,48 @@ function showAddStore(){const f=$('store-form')||$('add-store-form');if(f)f.styl
 function editStore(id){const s=(DATA.stores||[]).find(x=>(x.StoreID||x.store_id)===id);const f=$('store-form')||$('add-store-form');if(!s||!f)return;f.style.display='flex';if($('st-id')){$('st-id').value=s.StoreID||s.store_id||'';$('st-id').disabled=true;}if($('st-nm'))$('st-nm').value=s.Name||s.name||'';if($('st-city'))$('st-city').value=s.City||s.city||'';if($('st-addr'))$('st-addr').value=s.Address||s.address||'';if($('st-mgr'))$('st-mgr').value=s.Manager||s.manager||'';if($('st-ph'))$('st-ph').value=s.Phone||s.phone||'';}
 function closeStoreForm(){const f=$('store-form')||$('add-store-form');if(f)f.style.display='none';if($('st-id'))$('st-id').disabled=false;}
 async function saveStore(){const idEl=$('st-id'),nmEl=$('st-nm');const body={store_id:(idEl&&idEl.value||'').trim(),name:(nmEl&&nmEl.value||'').trim(),city:($('st-city')&&$('st-city').value)||'',address:($('st-addr')&&$('st-addr').value)||'',manager:($('st-mgr')&&$('st-mgr').value)||'',phone:($('st-ph')&&$('st-ph').value)||'',active:true};if(!body.store_id||!body.name){toast('Store ID + Name required','error');return;}const res=await api('/api/stores',{method:'POST',body});if(res&&(res.store_id||res.ok!==false)&&!res.detail){toast('✅ Store saved');closeStoreForm();await loadAll();renderStoresAdmin();renderDash&&renderDash();}else{const msg=(res&&(res.detail||res.msg))||'Failed';toast(typeof msg==='string'?msg:'Failed','error');}}
-function renderUsers(){const el=$('users-table')||$('u-table');if(el)el.innerHTML=DATA.users.map(u=>`<tr><td class="fw7">${u.UserID}</td><td>${u.Name}</td><td>${u.StoreName||u.StoreID}</td><td><span class="badge badge-blue">${u.Role}</span></td><td><span class="badge badge-green">Active</span></td></tr>`).join('');}
-function showAddUser(){if($('user-form')){$('user-form').style.display='flex';['u-nm','u-pin'].forEach(id=>{if($(id))$(id).value='';});}}function editUser(){}
-function closeUserForm(){if($('user-form'))$('user-form').style.display='none';}
-async function saveUser(){const body={store_id:$('u-store').value,store_name:(DATA.stores.find(s=>s.StoreID===$('u-store').value)||{}).Name||'',name:$('u-nm').value.trim(),role:$('u-role').value,pin:$('u-pin').value,active:true};if(!body.name||!body.pin){toast('Name+PIN required','error');return;}const res=await api('/api/auth/users',{method:'POST',body});if(res&&res.user_id){toast('✅ User saved');closeUserForm();await loadAll();renderUsers();}else toast('❌ '+(res&&res.msg||'Failed'),'error');}
+function renderUsers(){const el=$('users-table')||$('u-table');if(el)el.innerHTML=DATA.users.map(u=>`<tr><td class="fw7">${u.UserID}</td><td>${u.Name}</td><td>${u.StoreName||u.StoreID}</td><td><span class="badge badge-blue">${u.Role}</span></td><td><span class="badge ${u.Active==='N'?'badge-red':'badge-green'}">${u.Active==='N'?'Inactive':'Active'}</span></td><td><button class="btn btn-ghost btn-sm" onclick="editUser('${u.UserID}')">✏️</button> <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="toggleUserActive('${u.UserID}')">${u.Active==='N'?'✅ Activate':'🚫 Deactivate'}</button></td></tr>`).join('');}
+let editingUserId=null;
+function showAddUser(){editingUserId=null;if($('user-form')){$('user-form').style.display='flex';['u-nm','u-pin'].forEach(id=>{if($(id))$(id).value='';});if($('u-role'))$('u-role').value='cashier';if($('u-pin'))$('u-pin').placeholder='4-digit PIN';const t=document.querySelector('#user-form .modal-title');if(t)t.textContent='➕ Add User';}}
+function editUser(userId){
+  const u=DATA.users.find(x=>x.UserID===userId);
+  if(!u){toast('User not found','error');return;}
+  editingUserId=userId;
+  if($('user-form'))$('user-form').style.display='flex';
+  if($('u-nm'))$('u-nm').value=u.Name||'';
+  if($('u-role'))$('u-role').value=u.Role||'cashier';
+  if($('u-store'))$('u-store').value=u.StoreID||'';
+  if($('u-pin')){$('u-pin').value='';$('u-pin').placeholder='Leave blank to keep current PIN';}
+  const t=document.querySelector('#user-form .modal-title');if(t)t.textContent='✏️ Edit User — '+u.Name;
+}
+async function toggleUserActive(userId){
+  const u=DATA.users.find(x=>x.UserID===userId);
+  if(!u)return;
+  const newActive=u.Active==='N';
+  if(!confirm(`${newActive?'Activate':'Deactivate'} ${u.Name}?`))return;
+  const res=await api('/api/auth/users',{method:'POST',body:{user_id:userId,store_id:u.StoreID,store_name:u.StoreName,name:u.Name,role:u.Role,active:newActive}});
+  if(res&&res.user_id){toast('✅ Updated');await loadAll();renderUsers();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Failed'),'error');
+}
+function closeUserForm(){if($('user-form'))$('user-form').style.display='none';editingUserId=null;}
+async function saveUser(){
+  const storeId=$('u-store').value;
+  const body={
+    store_id:storeId,
+    store_name:storeId==='HO'?'Head Office':((DATA.stores.find(s=>s.StoreID===storeId)||{}).Name||''),
+    name:$('u-nm').value.trim(),
+    role:$('u-role').value,
+    active:true,
+  };
+  if(editingUserId)body.user_id=editingUserId;
+  const pin=$('u-pin').value.trim();
+  if(pin)body.pin=pin;
+  if(!body.name){toast('Name required','error');return;}
+  if(!editingUserId&&!pin){toast('PIN required for a new user','error');return;}
+  const res=await api('/api/auth/users',{method:'POST',body});
+  if(res&&res.user_id){toast(editingUserId?'✅ User updated':'✅ User saved');closeUserForm();await loadAll();renderUsers();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Failed'),'error');
+}
 function renderBanks(){const el=$('banks-table')||$('b-table');if(el)el.innerHTML=DATA.banks.map(b=>`<tr><td class="fw7">${b.BankID}</td><td>${b.Name}</td><td>${b.Device||'—'}</td><td><span class="badge badge-green">Active</span></td></tr>`).join('');}
 function showAddBank(){if($('bank-form')){$('bank-form').style.display='flex';['b-nm','b-acc','b-dev'].forEach(id=>{if($(id))$(id).value='';});if($('b-act'))$('b-act').value='Y';}}function editBank(){}
 function closeBankForm(){if($('bank-form'))$('bank-form').style.display='none';}

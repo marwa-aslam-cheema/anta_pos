@@ -549,7 +549,7 @@ body{display:flex;height:100vh;overflow:hidden}
           <button class="btn btn-primary btn-sm" onclick="showAddUser()">➕ Add User</button>
         </div>
         <p style="font-size:11px;color:var(--gray4);margin-bottom:13px">Each store can have multiple users with different PINs and roles. Cashier = sale only. Manager = reports + inventory. Admin = full access.</p>
-        <table><thead><tr><th>Name</th><th>Store</th><th>Role</th><th>PIN</th><th>Status</th><th>Actions</th></tr></thead>
+        <table><thead><tr><th>User ID</th><th>Name</th><th>Store</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="users-table"></tbody></table>
       </div>
       <div id="user-form" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeUserForm()">
