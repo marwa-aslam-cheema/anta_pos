@@ -1122,12 +1122,18 @@ function showInvoice(txn) {
       </div>
 
       <div style="text-align:center;margin-top:16px;padding-top:12px;border-top:1.5px dashed #cbd5e1;font-size:10px;color:#94a3b8">
-        <div style="font-size:19px;font-family:monospace;letter-spacing:3px;color:#0f172a">||| ${txn.id} |||</div>
+        <div id="inv-qr" style="display:flex;justify-content:center;margin-bottom:6px"></div>
+        <div style="font-size:11px;color:#475569;font-weight:600">${txn.id}</div>
         <div style="margin-top:6px">${DB.settings.policy}</div>
         <div style="margin-top:6px;font-weight:600;color:#475569">Thank you for shopping with us! شكراً لزيارتكم</div>
       </div>
     </div>`;
   document.getElementById('inv-modal').style.display = 'flex';
+  const qrBox = document.getElementById('inv-qr');
+  if (qrBox && typeof QRCode !== 'undefined') {
+    qrBox.innerHTML = '';
+    try { new QRCode(qrBox, { text: String(txn.id || ''), width: 96, height: 96, correctLevel: QRCode.CorrectLevel.M }); } catch (e) {}
+  }
 }
 
 /* ---------- RETURNS / EXCHANGE / CLAIMS ---------- */
