@@ -144,6 +144,7 @@ function applyBranding(b) {
   const name = (b && b.company_name) || '';
   const logo = (b && b.company_logo) || '';
   window.__brandName = name; // used by invoice/handover print templates
+  window.__brandLogo = logo;
   const logoBox = document.getElementById('brand-logo');
   const logoText = document.getElementById('brand-text');
   const loginTitle = document.getElementById('login-title-text');
@@ -1046,48 +1047,85 @@ function showInvoice(txn) {
   const items = txn.items || [];
   const promoNotes = txn.promoNotes || [];
   const money = (n) => fmt(n);
+  const brand = window.__brandName || 'ANTA Shoes';
+  const logo = window.__brandLogo || '';
+  const logoHtml = logo
+    ? `<img src="${logo}" style="width:52px;height:52px;object-fit:cover;border-radius:10px;margin:0 auto 8px;display:block">`
+    : '';
+
   const itemRows = items
-    .map((i) => {
+    .map((i, idx) => {
       const lineTotal = i.lineTotal != null ? i.lineTotal : i.price * i.qty;
-      const promoTag = i.promo ? `<div style="font-size:9px;color:var(--green);font-weight:700">🏷️ ${i.promo}${i.freeQty ? ` — ${i.freeQty} free` : ''}</div>` : '';
-      const lineDiscount = i.discount && i.discount > 0 ? `<div style="font-size:9px;color:var(--gray4)">-${money(i.discount)} off</div>` : '';
-      return `<tr><td>${i.name}${promoTag}${lineDiscount}</td><td align="center">${i.qty}</td><td align="right">${money(lineTotal)}</td></tr>`;
+      const promoTag = i.promo ? `<div style="font-size:9.5px;color:#0a7a3c;font-weight:700;margin-top:1px">🏷️ ${i.promo}${i.freeQty ? ` — ${i.freeQty} free` : ''}</div>` : '';
+      const lineDiscount = i.discount && i.discount > 0 ? `<div style="font-size:9.5px;color:#94a3b8">-${money(i.discount)} off</div>` : '';
+      const bg = idx % 2 === 1 ? 'background:#f8fafc' : '';
+      return `<tr style="${bg}">
+        <td style="padding:7px 4px;vertical-align:top">
+          <div style="font-weight:600;color:#1e293b">${i.name}</div>
+          ${promoTag}${lineDiscount}
+        </td>
+        <td style="padding:7px 4px;text-align:center;color:#475569;vertical-align:top">${i.qty}</td>
+        <td style="padding:7px 4px;text-align:right;font-weight:700;color:#1e293b;vertical-align:top">${money(lineTotal)}</td>
+      </tr>`;
     })
     .join('');
+
   const discountBlock = txn.discount
-    ? `<div style="display:flex;justify-content:space-between"><span>Item Discounts</span><span>-${money(txn.discount)}</span></div>`
+    ? `<div style="display:flex;justify-content:space-between;padding:3px 0;color:#475569"><span>Item Discounts</span><span>-${money(txn.discount)}</span></div>`
     : '';
   const globalDiscountBlock = txn.globalDiscount
-    ? `<div style="display:flex;justify-content:space-between"><span>Invoice Discount</span><span>-${money(txn.globalDiscount)}</span></div>`
+    ? `<div style="display:flex;justify-content:space-between;padding:3px 0;color:#475569"><span>Invoice Discount</span><span>-${money(txn.globalDiscount)}</span></div>`
     : '';
   const promoNotesBlock = promoNotes.length
-    ? `<div style="font-size:10px;color:var(--green);margin-top:3px">🏷️ Promotions applied: ${promoNotes.join(', ')}</div>`
+    ? `<div style="font-size:10.5px;color:#0a7a3c;font-weight:600;margin-top:6px;padding:6px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0">🏷️ Promotions applied: ${promoNotes.join(', ')}</div>`
     : '';
+
   document.getElementById('inv-content').innerHTML = `
-    <div data-invoice-id="${txn.id||''}" style="text-align:center;margin-bottom:12px">
-      <div style="font-size:22px;font-weight:900;color:var(--navy)">${(window.__brandName||'ANTA Shoes')}</div>
-      <div style="font-size:12px;color:var(--gray4)">${txn.store || DB.settings.storeName}</div>
-      <div style="font-size:11px;color:var(--gray4)">${txn.date} ${txn.time || ''} · ${txn.id}</div>
-    </div>
-    <div style="font-size:12px;margin-bottom:8px"><b>Customer:</b> ${txn.customer || 'Walk-in'}</div>
-    <table style="width:100%;font-size:12px;margin-bottom:10px">
-      <thead><tr style="border-bottom:1px solid var(--gray2)"><th align="left">Item</th><th>Qty</th><th align="right">Total</th></tr></thead>
-      <tbody>
-        ${itemRows}
-      </tbody>
-    </table>
-    <div style="border-top:1px dashed var(--gray2);padding-top:8px;font-size:13px">
-      <div style="display:flex;justify-content:space-between"><span>Subtotal</span><span>${money(txn.subtotal)}</span></div>
-      ${discountBlock}
-      ${globalDiscountBlock}
-      ${promoNotesBlock}
-      <div style="display:flex;justify-content:space-between;font-size:17px;font-weight:900;color:var(--navy);margin-top:5px"><span>TOTAL</span><span>${money(txn.total)}</span></div>
-      <div style="margin-top:4px">Payment: <b>${txn.payment}</b>${txn.payRef ? ' · Ref ' + txn.payRef : ''}</div>
-    </div>
-    <div style="text-align:center;margin-top:13px;padding-top:9px;border-top:1px dashed var(--gray2);font-size:10px;color:var(--gray4)">
-      <div style="font-size:20px;font-family:monospace;letter-spacing:3px">||| ${txn.id} |||</div>
-      <div>${DB.settings.policy}</div>
-      <div style="margin-top:3px">Thank you! شكراً لزيارتكم</div>
+    <div data-invoice-id="${txn.id||''}" style="font-family:Arial,Helvetica,sans-serif;color:#0f172a">
+      <div style="text-align:center;padding-bottom:14px;margin-bottom:14px;border-bottom:2.5px solid #0f172a">
+        ${logoHtml}
+        <div style="font-size:23px;font-weight:900;letter-spacing:.3px">${brand}</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px">${txn.store || DB.settings.storeName}</div>
+        <div style="display:inline-flex;gap:10px;margin-top:8px;font-size:10.5px;color:#64748b;background:#f1f5f9;padding:4px 12px;border-radius:20px">
+          <span>${txn.date}</span><span>·</span><span>${txn.time || ''}</span><span>·</span><span style="font-weight:700;color:#0f172a">${txn.id}</span>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#475569;margin-bottom:10px">
+        <span>Customer: <b style="color:#0f172a">${txn.customer || 'Walk-in'}</b></span>
+        <span>Cashier: <b style="color:#0f172a">${(window.USER&&window.USER.name)||''}</b></span>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:4px">
+        <thead>
+          <tr style="border-bottom:2px solid #0f172a">
+            <th style="text-align:left;padding:5px 4px;font-size:10.5px;letter-spacing:.4px;color:#475569">ITEM</th>
+            <th style="text-align:center;padding:5px 4px;font-size:10.5px;letter-spacing:.4px;color:#475569">QTY</th>
+            <th style="text-align:right;padding:5px 4px;font-size:10.5px;letter-spacing:.4px;color:#475569">TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+
+      <div style="border-top:1.5px dashed #cbd5e1;padding-top:10px;margin-top:6px;font-size:12.5px">
+        <div style="display:flex;justify-content:space-between;padding:3px 0;color:#475569"><span>Subtotal</span><span>${money(txn.subtotal)}</span></div>
+        ${discountBlock}
+        ${globalDiscountBlock}
+        ${promoNotesBlock}
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#0f172a;color:#fff;border-radius:8px;padding:10px 12px;margin-top:10px">
+          <span style="font-size:12px;font-weight:600;letter-spacing:.3px">TOTAL</span>
+          <span style="font-size:19px;font-weight:900">${money(txn.total)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11.5px;color:#475569">
+          <span>Payment Method</span><span style="font-weight:700;color:#0f172a">${txn.payment}${txn.payRef ? ' · Ref ' + txn.payRef : ''}</span>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:16px;padding-top:12px;border-top:1.5px dashed #cbd5e1;font-size:10px;color:#94a3b8">
+        <div style="font-size:19px;font-family:monospace;letter-spacing:3px;color:#0f172a">||| ${txn.id} |||</div>
+        <div style="margin-top:6px">${DB.settings.policy}</div>
+        <div style="margin-top:6px;font-weight:600;color:#475569">Thank you for shopping with us! شكراً لزيارتكم</div>
+      </div>
     </div>`;
   document.getElementById('inv-modal').style.display = 'flex';
 }
