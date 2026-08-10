@@ -93,6 +93,7 @@ def _auto_migrate() -> None:
             "department": "VARCHAR(64) DEFAULT ''",
             "season": "VARCHAR(64) DEFAULT ''",
             "gender": "VARCHAR(32) DEFAULT ''",
+            "original_price": "FLOAT DEFAULT 0",
         },
         "promotions": {
             "start_time": "VARCHAR(8) DEFAULT ''",
@@ -109,9 +110,22 @@ def _auto_migrate() -> None:
                 existing = {c["name"] for c in inspector.get_columns(table)}
             except Exception:
                 continue
+            newly_added = set()
             for col, ddl in cols.items():
                 if col not in existing:
                     try:
                         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                        newly_added.add(col)
                     except Exception:
                         pass
+            # One-time backfill: existing products won't have an Original
+            # Price yet (it defaults to 0) — seed it from their current
+            # retail price so the column isn't blank for everything
+            # already in the system. New rows created after this get
+            # their own original_price at creation time and this never
+            # touches them again.
+            if table == "products" and "original_price" in newly_added:
+                try:
+                    conn.execute(text("UPDATE products SET original_price = retail WHERE original_price = 0 OR original_price IS NULL"))
+                except Exception:
+                    pass

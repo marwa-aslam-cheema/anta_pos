@@ -5,6 +5,7 @@ from typing import Annotated, Optional
  
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -156,6 +157,7 @@ def list_products(
             "gender": getattr(p, "gender", "") or "",
             "cost": p.cost or 0,
             "retail": p.retail or 0,
+            "originalPrice": getattr(p, "original_price", 0) or 0,
             "reorder": p.reorder or 5,
             "opening": p.opening or 0,
             "active": bool(p.active),
@@ -235,6 +237,13 @@ def save_product(
         row.gender = body.gender
         row.cost = body.cost
         row.retail = body.retail
+        # Original Price is set once and stays fixed — only touch it if
+        # the caller explicitly sent a value (edit form deliberately
+        # correcting it), or if this product never had one yet.
+        if body.originalPrice is not None:
+            row.original_price = body.originalPrice
+        elif not getattr(row, "original_price", 0):
+            row.original_price = row.retail
         row.reorder = body.reorder
         row.opening = body.opening
         row.active = body.active
@@ -251,6 +260,7 @@ def save_product(
             size=body.size,
             cost=body.cost,
             retail=body.retail,
+            original_price=body.originalPrice if body.originalPrice is not None else body.retail,
             reorder=body.reorder,
             opening=body.opening,
             active=body.active,
@@ -273,6 +283,7 @@ def save_product(
         gender=getattr(row, "gender", "") or "",
         cost=row.cost,
         retail=row.retail,
+        originalPrice=getattr(row, "original_price", 0) or 0,
         reorder=row.reorder,
         opening=row.opening,
         active=row.active,
@@ -301,6 +312,16 @@ def _bulk_upsert_products(db: Session, rows: list[dict]) -> None:
         stmt = insert_fn(Product).values(chunk)
         set_dict = {c: getattr(stmt.excluded, c) for c in PRODUCT_UPSERT_COLS}
         set_dict["updated_at"] = datetime.utcnow()
+        # Original Price is set once and stays fixed on re-uploads — a
+        # bulk re-import (e.g. fixing a typo in one column) must NOT
+        # silently reset every product's original price. Only overwrite
+        # it when the incoming row explicitly carries a positive value
+        # (see the 0-sentinel logic in bulk_save_products above); 0 means
+        # "not specified", so the existing stored value is kept.
+        set_dict["original_price"] = case(
+            (stmt.excluded.original_price > 0, stmt.excluded.original_price),
+            else_=Product.original_price,
+        )
         stmt = stmt.on_conflict_do_update(index_elements=["barcode"], set_=set_dict)
         db.execute(stmt)
  
@@ -394,11 +415,26 @@ def bulk_save_products(
             continue
  
         is_update = item.barcode in existing_barcodes
+        explicit_original = item.originalPrice if (item.originalPrice or 0) > 0 else None
+        if explicit_original is not None:
+            row_original_price = explicit_original
+        elif is_update:
+            # Existing product, no Original Price given in this row — send
+            # 0 as a "don't touch it" sentinel; _bulk_upsert_products only
+            # overwrites the stored Original Price when the incoming value
+            # is positive, so this preserves whatever it already was.
+            row_original_price = 0
+        else:
+            # Brand-new product with no Original Price specified — there's
+            # nothing existing to preserve, so it starts equal to the
+            # current retail price (same as the single add/edit form).
+            row_original_price = item.retail
         valid_rows.append({
             "barcode": item.barcode, "name": item.name, "brand": item.brand, "category": item.category,
             "size": item.size, "color": item.color, "department": item.department, "season": item.season,
             "gender": item.gender, "cost": item.cost, "retail": item.retail, "reorder": item.reorder,
             "opening": item.opening, "active": item.active,
+            "original_price": row_original_price,
         })
         existing_barcodes.add(item.barcode)  # dedupe within the same batch
         if is_update:

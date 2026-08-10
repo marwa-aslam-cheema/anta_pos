@@ -475,6 +475,7 @@ function editProduct(bc){
   if($('p-season'))$('p-season').value=p.Season||'';
   if($('p-gender'))$('p-gender').value=p.Gender||'';
   if($('p-cost'))$('p-cost').value=p.Cost||0;
+  if($('p-orig'))$('p-orig').value=p.OriginalPrice||0;
   if($('p-ret'))$('p-ret').value=p.Retail||0;
   if($('p-ro'))$('p-ro').value=p.Reorder||5;
   const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));
@@ -497,7 +498,7 @@ async function fetchAndRenderProductsPage(){
       api('/api/products?'+qs.toString()),
       api('/api/products/count?'+countQs.toString()),
     ]);
-    prodPageItems=Array.isArray(rows)?rows.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'})):[];
+    prodPageItems=Array.isArray(rows)?rows.map(p=>({...p,Barcode:p.barcode,Name:p.name,Brand:p.brand,Category:p.category,Department:p.department||'',Season:p.season||'',Gender:p.gender||'',Color:p.color||'',Size:p.size,Cost:p.cost,Retail:p.retail,OriginalPrice:p.originalPrice||0,Reorder:p.reorder,Opening:p.opening,Active:p.active?'Y':'N'})):[];
     prodTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:prodPageItems.length;
     prodFilteredList=prodPageItems; // kept in sync for anything still reading the old name
   }catch(_e){
@@ -513,7 +514,7 @@ function renderProductsTable(){
   // Redraws the table from the already-fetched page (prodPageItems) with
   // no server call — used for selection toggles etc. where nothing about
   // WHICH rows are shown has changed, only their checked state.
-  if($('prod-table'))$('prod-table').innerHTML=prodPageItems.map(p=>{const m=p.Cost&&p.Retail?((p.Retail-p.Cost)/p.Retail*100).toFixed(1):'—';const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));const qty=wh?(+wh.OnHand||0):0;const checked=selectedProducts.has(p.Barcode)?'checked':'';return`<tr><td><input type="checkbox" ${checked} onchange="toggleProduct('${p.Barcode}')"></td><td style="font-family:monospace;font-size:10px">${p.Barcode}</td><td>${qty}</td><td>${fmt(p.Cost||0)}</td><td>${fmt(p.Retail||0)}</td><td class="fw7">${p.Name}</td><td>${p.Brand||'ANTA'}</td><td>${p.Category||''}</td><td>${p.Department||''}</td><td>${p.Season||''}</td><td>${p.Gender||''}</td><td>${p.Size||'—'}</td><td>${p.Color||''}</td><td>${m}%</td><td>${p.Reorder||5}</td><td><span class="badge badge-green">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="editProduct('${p.Barcode}')">✏️</button> <button class="btn btn-ghost btn-sm" onclick="deleteProduct('${p.Barcode}')">🗑️</button></td></tr>`;}).join('')||'<tr><td colspan="17" style="text-align:center;color:var(--gray3);padding:18px">No products found</td></tr>';
+  if($('prod-table'))$('prod-table').innerHTML=prodPageItems.map(p=>{const m=p.Cost&&p.Retail?((p.Retail-p.Cost)/p.Retail*100).toFixed(1):'—';const wh=(DATA.warehouse||[]).find(w=>String(w.Barcode)===String(p.Barcode));const qty=wh?(+wh.OnHand||0):0;const checked=selectedProducts.has(p.Barcode)?'checked':'';return`<tr><td><input type="checkbox" ${checked} onchange="toggleProduct('${p.Barcode}')"></td><td style="font-family:monospace;font-size:10px">${p.Barcode}</td><td>${qty}</td><td>${fmt(p.Cost||0)}</td><td>${fmt(p.OriginalPrice||0)}</td><td>${fmt(p.Retail||0)}</td><td class="fw7">${p.Name}</td><td>${p.Brand||'ANTA'}</td><td>${p.Category||''}</td><td>${p.Department||''}</td><td>${p.Season||''}</td><td>${p.Gender||''}</td><td>${p.Size||'—'}</td><td>${p.Color||''}</td><td>${m}%</td><td>${p.Reorder||5}</td><td><span class="badge badge-green">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="editProduct('${p.Barcode}')">✏️</button> <button class="btn btn-ghost btn-sm" onclick="deleteProduct('${p.Barcode}')">🗑️</button></td></tr>`;}).join('')||'<tr><td colspan="18" style="text-align:center;color:var(--gray3);padding:18px">No products found</td></tr>';
   const selAll=$('prod-select-all');
   if(selAll)selAll.checked=prodPageItems.length>0&&prodPageItems.every(p=>selectedProducts.has(p.Barcode));
   updateProdSelectedInfo();
@@ -525,7 +526,7 @@ function renderProducts(){
 function showAddProd(){
   editingProductBarcode=null;
   const title=$('add-prod-title'); if(title)title.textContent='➕ Add / Edit Product';
-  ['p-bc','p-nm','p-sz','p-color','p-dept','p-season','p-cost','p-ret'].forEach(id=>{if($(id))$(id).value='';});
+  ['p-bc','p-nm','p-sz','p-color','p-dept','p-season','p-cost','p-ret','p-orig'].forEach(id=>{if($(id))$(id).value='';});
   if($('p-br'))$('p-br').value='ANTA';
   if($('p-cat'))$('p-cat').selectedIndex=0;
   if($('p-gender'))$('p-gender').value='';
@@ -547,6 +548,8 @@ async function saveProd(){
     cost:+$('p-cost').value||0,retail:+$('p-ret').value||0,reorder:+($('p-ro')?.value)||5,
     opening:+($('p-op')?.value||0),qty:+($('p-op')?.value||0),active:true,
   };
+  const origVal=($('p-orig')&&$('p-orig').value||'').trim();
+  if(origVal)body.originalPrice=+origVal;
   if(editingProductBarcode&&editingProductBarcode!==bc)body.old_barcode=editingProductBarcode;
   const res=await api('/api/products',{method:'POST',body});
   if(res&&res.barcode){
@@ -559,15 +562,15 @@ async function downloadProdTemplate(){
   const genders=['Men','Women','Kids','Unisex'];
   if(typeof ExcelJS==='undefined'){
     // Fallback: plain CSV (no dropdowns) if ExcelJS failed to load (e.g. offline)
-    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Brand,Category,Department,Season,Gender,Size,Color,Cost,Retail,Reorder,Qty\n8001000000009,ANTA Sample Shoe,ANTA,Running,Footwear,SS26,Men,42,White,120,180,5,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Brand,Category,Department,Season,Gender,Size,Color,Cost,Original Price,Retail,Reorder,Qty\n8001000000009,ANTA Sample Shoe,ANTA,Running,Footwear,SS26,Men,42,White,120,180,180,5,25\n'],{type:'text/csv'}));a.download='products_template.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(a.href),1000);
     return;
   }
   const wb=new ExcelJS.Workbook();
   const ws=wb.addWorksheet('Products');
-  const headers=['Barcode','Name','Brand','Category','Department','Season','Gender','Size','Color','Cost','Retail','Reorder','Qty'];
+  const headers=['Barcode','Name','Brand','Category','Department','Season','Gender','Size','Color','Cost','Original Price','Retail','Reorder','Qty'];
   ws.addRow(headers);
   ws.getRow(1).font={bold:true};
-  ws.addRow(['8001000000009','ANTA Sample Shoe','ANTA','Running','Footwear','SS26','Men','42','White',120,180,5,25]);
+  ws.addRow(['8001000000009','ANTA Sample Shoe','ANTA','Running','Footwear','SS26','Men','42','White',120,180,180,5,25]);
   ws.columns.forEach(c=>c.width=15);
   const catCol='D',genderCol='G',lastRow=1000;
   for(let r=2;r<=lastRow;r++){
@@ -591,7 +594,8 @@ const FIELD_ALIASES={
   size:['size'],
   color:['color','colour'],
   cost:['cost','unitcost','costprice','buyingprice'],
-  retail:['retail','price','sellingprice','retailprice','currentprice'],
+  originalprice:['originalprice','orginalprice','origprice','firstprice','msrp','launchprice'],
+  retail:['retail','price','sellingprice','retailprice','currentprice','currentretailprice'],
   reorder:['reorder','reorderlevel','minstock','reorderqty'],
   qty:['qty','quantity','stock','openingqty','opening','onhand'],
 };
@@ -701,6 +705,8 @@ async function uploadProducts(file){
       return;
     }
     const item={barcode,name,brand:get('brand')||'ANTA',category:get('category')||'',department:get('department')||'',season:get('season')||'',gender:get('gender')||'',size:get('size')||'',color:get('color')||'',cost:+(get('cost')||0),retail:+(get('retail')||0),reorder:+(get('reorder')||5),opening:+(qtyRaw||0),qty:+(qtyRaw||0),active:true};
+    const origPriceRaw=get('originalprice');
+    if(origPriceRaw!==''&&origPriceRaw!==undefined)item.originalPrice=+origPriceRaw||0;
     if(byBarcode.has(barcode)){
       logRows.push({barcode,name:byBarcode.get(barcode).name,status:'skipped',reason:'duplicate barcode in file — overwritten by a later row with the same barcode'});
     } else {
@@ -972,7 +978,7 @@ async function exportProducts(){
   toast('⏳ Preparing export — fetching full product catalog…','info');
   const all=await api('/api/products?active_only=false');
   if(!Array.isArray(all)){toast('❌ Export failed','error');return;}
-  _csvDownload(all,[['Barcode','barcode'],['Name','name'],['Brand','brand'],['Category','category'],['Department','department'],['Season','season'],['Gender','gender'],['Size','size'],['Color','color'],['Cost','cost'],['Retail','retail'],['Reorder','reorder'],['Qty','opening']],'products_'+today()+'.csv');
+  _csvDownload(all,[['Barcode','barcode'],['Name','name'],['Brand','brand'],['Category','category'],['Department','department'],['Season','season'],['Gender','gender'],['Size','size'],['Color','color'],['Cost','cost'],['Original Price','originalPrice'],['Retail','retail'],['Reorder','reorder'],['Qty','opening']],'products_'+today()+'.csv');
 }
 function saveBSEntries(){}function exportBS(){toast('Use browser print','info');}
 function cfPreset(){const p=($('cf-period')||{}).value||'month',d=today();if(!$('cf-from'))return;if(p==='year'){$('cf-from').value=d.slice(0,4)+'-01-01';$('cf-to').value=d;}else{$('cf-from').value=d.slice(0,7)+'-01';$('cf-to').value=d;}}
@@ -1105,7 +1111,19 @@ function applyRoleUI(){
     const need=(el.getAttribute('data-role')||'').split(',').map(s=>s.trim()).filter(Boolean);
     el.style.display = (!need.length || role==='admin' || need.includes(role)) ? '' : 'none';
   });
-  // accountant: hide pure stock admin if desired — keep view via data-role attrs
+  const roleLabels={admin:'HO ADMIN',manager:'MANAGER',accountant:'ACCOUNTANT'};
+  const tag=$('ho-role-tag');
+  if(tag)tag.textContent=roleLabels[role]||role.toUpperCase()||'HO';
+  const nameEl=$('ho-user-name');
+  if(nameEl)nameEl.textContent=(currentUser&&currentUser.name)||'';
+}
+function hoLogout(){
+  if(!confirm('Logout from HO?'))return;
+  CFG.token='';
+  localStorage.removeItem('anta_ho_token');
+  currentUser=null;
+  if(_hoAutoRefreshTimer){clearInterval(_hoAutoRefreshTimer);_hoAutoRefreshTimer=null;}
+  location.reload();
 }
 /* ===== HO i18n AR/EN ===== */
 const HO_I18N = {

@@ -81,7 +81,8 @@ class Product(Base):
     season: Mapped[str] = mapped_column(String(64), default="")
     gender: Mapped[str] = mapped_column(String(32), default="")
     cost: Mapped[float] = mapped_column(Float, default=0.0)
-    retail: Mapped[float] = mapped_column(Float, default=0.0)
+    retail: Mapped[float] = mapped_column(Float, default=0.0)  # CURRENT selling price — changes over time
+    original_price: Mapped[float] = mapped_column(Float, default=0.0)  # price set when FIRST created — stays fixed
     reorder: Mapped[int] = mapped_column(Integer, default=5)
     opening: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

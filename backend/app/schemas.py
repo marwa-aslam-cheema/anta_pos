@@ -100,6 +100,7 @@ class ProductOut(BaseModel):
     gender: str = ""
     cost: float = 0
     retail: float = 0
+    originalPrice: float = 0
     reorder: int = 5
     opening: int = 0
     active: bool = True
@@ -121,6 +122,7 @@ class ProductIn(BaseModel):
     gender: str = ""
     cost: float = 0
     retail: float = 0
+    originalPrice: Optional[float] = None
     reorder: int = 5
     opening: int = 0
     active: bool = True
