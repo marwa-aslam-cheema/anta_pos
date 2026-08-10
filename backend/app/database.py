@@ -84,8 +84,17 @@ def init_db() -> None:
 
 
 def _auto_migrate() -> None:
-    """Add newly introduced columns to existing tables (safe, additive). Works for SQLite and Postgres."""
+    """Add newly introduced columns to existing tables (safe, additive). Works for SQLite and Postgres.
+
+    Every statement here has a hard timeout and its own try/except — a
+    single stuck lock or slow statement must NEVER be able to hang the
+    entire app's startup (which is what happened once: an ALTER TABLE +
+    UPDATE sharing one long transaction hung waiting on a lock, and since
+    this runs synchronously before uvicorn binds to a port, Render never
+    saw an open port and the whole deploy died with no error in the logs).
+    """
     from sqlalchemy import inspect, text
+    from sqlalchemy.exc import OperationalError
 
     wanted = {
         "products": {
@@ -103,29 +112,44 @@ def _auto_migrate() -> None:
             "received_by": "VARCHAR(128) DEFAULT ''",
         },
     }
+    is_postgres = not settings.database_url.startswith("sqlite")
     inspector = inspect(engine)
-    with engine.begin() as conn:
-        for table, cols in wanted.items():
-            try:
-                existing = {c["name"] for c in inspector.get_columns(table)}
-            except Exception:
+    products_needs_backfill = False
+
+    for table, cols in wanted.items():
+        try:
+            existing = {c["name"] for c in inspector.get_columns(table)}
+        except Exception:
+            continue
+        for col, ddl in cols.items():
+            if col in existing:
                 continue
-            newly_added = set()
-            for col, ddl in cols.items():
-                if col not in existing:
-                    try:
-                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
-                        newly_added.add(col)
-                    except Exception:
-                        pass
-            # One-time backfill: existing products won't have an Original
-            # Price yet (it defaults to 0) — seed it from their current
-            # retail price so the column isn't blank for everything
-            # already in the system. New rows created after this get
-            # their own original_price at creation time and this never
-            # touches them again.
-            if table == "products" and "original_price" in newly_added:
-                try:
-                    conn.execute(text("UPDATE products SET original_price = retail WHERE original_price = 0 OR original_price IS NULL"))
-                except Exception:
-                    pass
+            # Each ALTER TABLE gets its own short-lived connection/
+            # transaction with a hard timeout, instead of one long
+            # transaction shared across every table — so a lock on one
+            # table can never block the others, or the app itself.
+            try:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                        conn.execute(text("SET LOCAL statement_timeout = '10s'"))
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                if table == "products" and col == "original_price":
+                    products_needs_backfill = True
+            except (OperationalError, Exception):  # noqa: BLE001 — never let a migration hiccup block startup
+                pass
+
+    # One-time backfill, in its OWN transaction (never shares one with the
+    # ALTER TABLE statements above) so it can't be blocked by — or block —
+    # anything else. Existing products won't have an Original Price yet
+    # (defaults to 0) — seed it from their current retail price so the
+    # column isn't blank for everything already in the system.
+    if products_needs_backfill:
+        try:
+            with engine.begin() as conn:
+                if is_postgres:
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                    conn.execute(text("SET LOCAL statement_timeout = '15s'"))
+                conn.execute(text("UPDATE products SET original_price = retail WHERE original_price = 0 OR original_price IS NULL"))
+        except (OperationalError, Exception):  # noqa: BLE001
+            pass
