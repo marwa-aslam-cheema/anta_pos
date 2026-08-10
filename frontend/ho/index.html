@@ -62,14 +62,14 @@ body{display:flex;height:100vh;overflow:hidden}
   <nav>
     <div class="nav-sec">Overview</div>
     <div class="nav-item active" onclick="show('dashboard')"><span class="ico">🏢</span>HO Dashboard</div>
-    <div class="nav-item" onclick="show('stores-view')"><span class="ico">🗺️</span>All Stores</div>
+    <div class="nav-item" onclick="show('stores-view')" data-role="admin,manager"><span class="ico">🗺️</span>All Stores</div>
     <div class="nav-sec">Stock Management</div>
-    <div class="nav-item" onclick="show('warehouse')"><span class="ico">🏭</span>HO Warehouse</div>
-    <div class="nav-item" onclick="show('supplier-grn')"><span class="ico">📦</span>Supplier GRN</div>
-    <div class="nav-item" onclick="show('store-grn')"><span class="ico">🚚</span>Send to Stores (GRN)</div>
-    <div class="nav-item" onclick="show('transfer')"><span class="ico">🔄</span>Store Transfer</div>
+    <div class="nav-item" onclick="show('warehouse')" data-role="admin,manager"><span class="ico">🏭</span>HO Warehouse</div>
+    <div class="nav-item" onclick="show('supplier-grn')" data-role="admin,manager"><span class="ico">📦</span>Supplier GRN</div>
+    <div class="nav-item" onclick="show('store-grn')" data-role="admin,manager"><span class="ico">🚚</span>Send to Stores (GRN)</div>
+    <div class="nav-item" onclick="show('transfer')" data-role="admin,manager"><span class="ico">🔄</span>Store Transfer</div>
     <div class="nav-sec">Products</div>
-    <div class="nav-item" onclick="show('products')"><span class="ico">👟</span>Product Master</div>
+    <div class="nav-item" onclick="show('products')" data-role="admin,manager"><span class="ico">👟</span>Product Master</div>
     <div class="nav-sec">Finance</div>
     <div class="nav-item" onclick="show('pl')"><span class="ico">📊</span>P&L Statement</div>
     <div class="nav-item" onclick="show('balance-sheet')"><span class="ico">⚖️</span>Balance Sheet</div>
@@ -83,12 +83,12 @@ body{display:flex;height:100vh;overflow:hidden}
     <div class="nav-item" onclick="show('capital')"><span class="ico">🏦</span>Capital & Equity</div>
     <div class="nav-sec">Reports</div>
     <div class="nav-item" onclick="show('reports')"><span class="ico">📈</span>Sales Reports</div>
-    <div class="nav-item" onclick="show('inventory-ho')"><span class="ico">🗃️</span>Inventory — All</div>
+    <div class="nav-item" onclick="show('inventory-ho')" data-role="admin,manager"><span class="ico">🗃️</span>Inventory — All</div>
     <div class="nav-sec">Admin</div>
-    <div class="nav-item" onclick="show('stores-admin')"><span class="ico">🏪</span>Manage Stores</div>
-    <div class="nav-item" onclick="show('users')"><span class="ico">👥</span>Users & PINs</div>
-    <div class="nav-item" onclick="show('banks')"><span class="ico">🏦</span>Banks & Payments</div>
-    <div class="nav-item" onclick="show('settings')"><span class="ico">⚙️</span>Settings</div>
+    <div class="nav-item" onclick="show('stores-admin')" data-role="admin"><span class="ico">🏪</span>Manage Stores</div>
+    <div class="nav-item" onclick="show('users')" data-role="admin"><span class="ico">👥</span>Users & PINs</div>
+    <div class="nav-item" onclick="show('banks')" data-role="admin"><span class="ico">🏦</span>Banks & Payments</div>
+    <div class="nav-item" onclick="show('settings')" data-role="admin"><span class="ico">⚙️</span>Settings</div>
   </nav>
 </div>
 

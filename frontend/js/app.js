@@ -234,12 +234,21 @@ async function pinSubmit() {
   if (pd) pd.textContent = '----';
   setOnline('online', 'Wrong PIN');
 }
+function applyProfitVisibility() {
+  // Profit is a company-financial number — only meaningful to whoever
+  // manages the money (admin/accountant). Cashiers and store managers
+  // don't need to see it while ringing up sales.
+  const role = (USER && USER.role) || 'cashier';
+  const canSeeProfit = role === 'admin' || role === 'accountant';
+  document.querySelectorAll('.profit-col').forEach((el) => { el.style.display = canSeeProfit ? '' : 'none'; });
+}
 function doLogin(user, storeId, storeName) {
   USER = user || {};
   window.USER = USER;
   currentUser = USER;
   DB.settings.storeId = USER.storeId || storeId;
   DB.settings.storeName = USER.storeName || storeName;
+  applyProfitVisibility();
   const ls = document.getElementById('login-screen'); if (ls) ls.style.display = 'none';
   const app = document.getElementById('app'); if (app) app.style.display = 'flex';
   const sb = document.getElementById('sb-store'); if (sb) sb.textContent = DB.settings.storeName;
@@ -451,11 +460,62 @@ async function loadLocalReturns() {
 }
 
 /* ---------- DASHBOARD ---------- */
-async function sendSalesReport(via) {
-  // Free, zero-setup approach: build the message text, then hand off to
-  // WhatsApp Web/App (wa.me link) or the device's own email app (mailto)
-  // with everything pre-filled — one more tap to actually send. No API
-  // keys or business accounts needed on either side.
+/* ---------- SALES REPORT — WhatsApp/Email with saved recipients ---------- */
+let _reportVia = null;
+let _lastReportData = null;
+function _getRecipients(via) {
+  try { return JSON.parse(localStorage.getItem('anta_recipients_' + via) || '[]'); } catch (e) { return []; }
+}
+function _saveRecipients(via, arr) {
+  localStorage.setItem('anta_recipients_' + via, JSON.stringify(arr));
+}
+function openRecipientPicker(via) {
+  _reportVia = via;
+  document.getElementById('recipient-picker-title').textContent = via === 'whatsapp' ? '📤 Send Sales Report — WhatsApp' : '✉️ Send Sales Report — Email';
+  document.getElementById('new-recipient-input').placeholder = via === 'whatsapp' ? 'Add number (e.g. 218912345678)' : 'Add email address';
+  renderRecipientList();
+  document.getElementById('recipient-picker').style.display = 'flex';
+}
+function closeRecipientPicker() {
+  document.getElementById('recipient-picker').style.display = 'none';
+}
+function renderRecipientList() {
+  const list = _getRecipients(_reportVia);
+  const el = document.getElementById('recipient-list');
+  if (!list.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--gray4);padding:8px 0">No saved recipients yet — add one below.</div>';
+    return;
+  }
+  el.innerHTML = list.map((r, i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--gray1)">
+      <input type="checkbox" id="recip-${i}" checked>
+      <label for="recip-${i}" style="flex:1;font-size:13px">${r}</label>
+      <button class="btn btn-ghost btn-sm" style="color:var(--red);padding:2px 7px" onclick="removeRecipient(${i})">✕</button>
+    </div>`).join('');
+}
+function addRecipient() {
+  const input = document.getElementById('new-recipient-input');
+  const val = (input.value || '').trim();
+  if (!val) return;
+  const list = _getRecipients(_reportVia);
+  if (!list.includes(val)) { list.push(val); _saveRecipients(_reportVia, list); }
+  input.value = '';
+  renderRecipientList();
+}
+function removeRecipient(i) {
+  const list = _getRecipients(_reportVia);
+  list.splice(i, 1);
+  _saveRecipients(_reportVia, list);
+  renderRecipientList();
+}
+async function confirmSendReport() {
+  const list = _getRecipients(_reportVia);
+  const selected = list.filter((_, i) => document.getElementById('recip-' + i) && document.getElementById('recip-' + i).checked);
+  if (!selected.length) { toast('Select at least one recipient', 'error'); return; }
+  closeRecipientPicker();
+  await sendSalesReport(_reportVia, selected);
+}
+async function sendSalesReport(via, recipients) {
   toast('⏳ Preparing report…', 'info');
   const todayStr = new Date().toISOString().slice(0, 10);
   const res = await api('/api/reports?from=' + todayStr + '&to=' + todayStr);
@@ -463,27 +523,49 @@ async function sendSalesReport(via) {
   const inv = (res && res.invoices) || 0;
   const units = (res && res.units) || 0;
   const pay = (res && res.paymentBreakdown) || {};
-  const payLines = Object.entries(pay).map(([k, v]) => `  ${k}: ${fmt2(v)}`).join('\n') || '  —';
+  const txns = (res && res.transactions) || [];
   const storeName = DB.settings.storeName || 'Store';
   const now = new Date();
+
+  // Build the actual Excel file — this is the real report; the
+  // WhatsApp/email message is just a short heads-up with the numbers,
+  // since neither wa.me nor mailto: links support attaching a file
+  // automatically (browser/WhatsApp security limitation, not something
+  // this app can bypass for free) — so the file downloads, and you
+  // attach it in the chat/email with one extra tap.
+  const summarySheet = [
+    ['Sales Report', storeName],
+    ['Date', now.toLocaleDateString()],
+    [],
+    ['Invoices', inv],
+    ['Units Sold', units],
+    ['Total Revenue', rev],
+    [],
+    ['Payment Method', 'Amount'],
+    ...Object.entries(pay).map(([k, v]) => [k, v]),
+  ];
+  const txnSheet = [['Invoice', 'Time', 'Customer', 'Items', 'Units', 'Payment', 'Total']]
+    .concat(txns.map((t) => [t.id, t.time, t.customer, t.items, t.units, t.payment, t.total]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summarySheet), 'Summary');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(txnSheet), 'Transactions');
+  XLSX.writeFile(wb, 'sales_report_' + storeName.replace(/[^a-z0-9]/gi, '_') + '_' + todayStr + '.xlsx');
+
+  const payLines = Object.entries(pay).map(([k, v]) => `  ${k}: ${fmt2(v)}`).join('\n') || '  —';
   const text =
-    `📊 Sales Report — ${storeName}\n` +
-    `${now.toLocaleDateString()} ${now.toLocaleTimeString()}\n\n` +
-    `Invoices: ${inv}\n` +
-    `Units sold: ${units}\n` +
-    `Total Revenue: ${fmt2(rev)}\n\n` +
-    `Payment breakdown:\n${payLines}`;
+    `📊 Sales Report — ${storeName}\n${now.toLocaleDateString()} ${now.toLocaleTimeString()}\n\n` +
+    `Invoices: ${inv}\nUnits sold: ${units}\nTotal Revenue: ${fmt2(rev)}\n\nPayment breakdown:\n${payLines}\n\n` +
+    `📎 Full Excel report downloaded — please attach it here.`;
 
   if (via === 'whatsapp') {
-    const number = localStorage.getItem('anta_manager_whatsapp') || prompt('Manager\'s WhatsApp number (with country code, e.g. 218912345678):', '');
-    if (!number) return;
-    localStorage.setItem('anta_manager_whatsapp', number);
-    window.open('https://wa.me/' + number.replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(text), '_blank');
+    recipients.forEach((number, i) => {
+      setTimeout(() => {
+        window.open('https://wa.me/' + number.replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(text), '_blank');
+      }, i * 400); // stagger so browsers don't block multiple popups at once
+    });
+    if (recipients.length > 1) toast('If some chats didn\'t open, allow pop-ups for this site and try again', 'warn');
   } else {
-    const email = localStorage.getItem('anta_manager_email') || prompt('Manager\'s email address:', '');
-    if (!email) return;
-    localStorage.setItem('anta_manager_email', email);
-    window.location.href = 'mailto:' + email + '?subject=' + encodeURIComponent('Sales Report — ' + storeName + ' — ' + now.toLocaleDateString()) + '&body=' + encodeURIComponent(text);
+    window.location.href = 'mailto:' + recipients.join(',') + '?subject=' + encodeURIComponent('Sales Report — ' + storeName + ' — ' + now.toLocaleDateString()) + '&body=' + encodeURIComponent(text);
   }
 }
 async function renderDash() {
@@ -1084,32 +1166,38 @@ async function loadGRNHistory() {
     if (!grouped[line.GRNID]) grouped[line.GRNID] = { grnId: line.GRNID, date: line.Date, receivedBy: line.ReceivedBy, receivedAt: line.ReceivedAt, lines: [] };
     grouped[line.GRNID].lines.push(line);
   });
+  window.__grnHistoryData = grouped;
   const grns = Object.values(grouped).sort((a, b) => (b.receivedAt || '').localeCompare(a.receivedAt || ''));
   if (!grns.length) {
     gl.innerHTML = '<div style="text-align:center;padding:22px;color:var(--gray3);font-size:12px">No GRNs received yet</div>';
     return;
   }
-  gl.innerHTML = grns
-    .map(
-      (g) => `
-    <div class="grn-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div><div style="font-weight:800;color:var(--navy)">${g.grnId}</div><div style="font-size:11px;color:var(--gray4)">Issued: ${g.date} · ${g.lines.length} item(s)</div></div>
-        <div style="text-align:right;font-size:11px;color:var(--gray4)">
-          <div>✅ Received: <b>${g.receivedAt || '—'}</b></div>
-          <div>By: <b>${g.receivedBy || '—'}</b></div>
-        </div>
-      </div>
-      <table><thead><tr><th>Barcode</th><th>Product</th><th>Issued</th><th>Received</th></tr></thead>
-      <tbody>${g.lines
-        .map(
-          (l) =>
-            `<tr><td style="font-family:monospace;font-size:10px">${l.Barcode}</td><td>${l.Name}</td><td style="text-align:center">${l.QtyIssued}</td><td style="text-align:center;font-weight:700;color:var(--green)">${l.QtyReceived}</td></tr>`
-        )
-        .join('')}</tbody></table>
-    </div>`
-    )
-    .join('');
+  // Summary first — GRN number, date, total issued/received qty across
+  // all items in that GRN — so you can see at a glance what a GRN was,
+  // without scrolling through every line. Tap a row for the item-level
+  // breakdown if you need it.
+  gl.innerHTML = `<table><thead><tr><th>GRN ID</th><th>Date</th><th>Items</th><th>Issued Qty</th><th>Received Qty</th><th>Received By</th><th></th></tr></thead><tbody>` +
+    grns.map((g) => {
+      const totalIssued = g.lines.reduce((s, l) => s + (+l.QtyIssued || 0), 0);
+      const totalReceived = g.lines.reduce((s, l) => s + (+l.QtyReceived || 0), 0);
+      return `<tr style="cursor:pointer" onclick="toggleGRNDetail('${g.grnId}')">
+        <td class="fw7">${g.grnId}</td>
+        <td>${g.receivedAt ? g.receivedAt.split(' ')[0] : g.date}</td>
+        <td style="text-align:center">${g.lines.length}</td>
+        <td style="text-align:center">${totalIssued}</td>
+        <td style="text-align:center;font-weight:700;color:var(--green)">${totalReceived}</td>
+        <td>${g.receivedBy || '—'}</td>
+        <td style="text-align:center">▼</td>
+      </tr>
+      <tr id="grn-detail-${g.grnId}" style="display:none"><td colspan="7" style="padding:0">
+        <table style="margin:6px 0 6px 14px;width:calc(100% - 14px)"><thead><tr><th>Barcode</th><th>Product</th><th>Issued</th><th>Received</th></tr></thead>
+        <tbody>${g.lines.map((l) => `<tr><td style="font-family:monospace;font-size:10px">${l.Barcode}</td><td>${l.Name}</td><td style="text-align:center">${l.QtyIssued}</td><td style="text-align:center;font-weight:700;color:var(--green)">${l.QtyReceived}</td></tr>`).join('')}</tbody></table>
+      </td></tr>`;
+    }).join('') + `</tbody></table>`;
+}
+function toggleGRNDetail(grnId) {
+  const row = document.getElementById('grn-detail-' + grnId);
+  if (row) row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
 }
 async function loadGRNs() {
   const gl = document.getElementById('grn-list');
@@ -1334,17 +1422,25 @@ async function loadReports() {
       .slice(0, 150)
       .map(
         (x) =>
-          `<tr><td class="fw7">${x.id}</td><td>${x.date||''}</td><td>${x.time||''}</td><td>${x.customer||''}</td><td style="text-align:center">${x.items||0}</td><td style="text-align:center">${x.units||0}</td><td style="font-size:10px;max-width:200px">${x.productList||''}</td><td>${fmt(x.subtotal||0)}</td><td>${fmt(x.discount||0)}</td><td class="fw7" style="color:var(--green)">${fmt(x.profit||0)}</td><td>${x.payment||''}</td><td class="fw7">${fmt(x.total||0)}</td></tr>`
+          `<tr><td class="fw7">${x.id}</td><td>${x.date||''}</td><td>${x.time||''}</td><td>${x.customer||''}</td><td style="text-align:center">${x.items||0}</td><td style="text-align:center">${x.units||0}</td><td style="font-size:10px;max-width:200px">${x.productList||''}</td><td>${fmt(x.subtotal||0)}</td><td>${fmt(x.discount||0)}</td><td class="fw7 profit-col" style="display:none;color:var(--green)">${fmt(x.profit||0)}</td><td>${x.payment||''}</td><td class="fw7">${fmt(x.total||0)}</td></tr>`
       )
       .join('') ||
     '<tr><td colspan="12" style="text-align:center;color:var(--gray3);padding:14px">No transactions</td></tr>';
+  applyProfitVisibility();
 }
 function exportRpt() {
   const rows = (window.__lastReport && window.__lastReport.transactions) || [];
   const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const header = ['Invoice','Date','Time','Customer','Items','Units','Products','Subtotal','Discount','Cost','Profit','Margin%','Payment','Ref','Total'];
+  const role = (USER && USER.role) || 'cashier';
+  const canSeeProfit = role === 'admin' || role === 'accountant';
+  const header = canSeeProfit
+    ? ['Invoice','Date','Time','Customer','Items','Units','Products','Subtotal','Discount','Cost','Profit','Margin%','Payment','Ref','Total']
+    : ['Invoice','Date','Time','Customer','Items','Units','Products','Subtotal','Discount','Payment','Ref','Total'];
+  const rowToCells = (x) => canSeeProfit
+    ? [x.id, x.date, x.time, x.customer, x.items, x.units, x.productList, x.subtotal, x.discount, x.cost, x.profit, x.margin, x.payment, x.payRef, x.total]
+    : [x.id, x.date, x.time, x.customer, x.items, x.units, x.productList, x.subtotal, x.discount, x.payment, x.payRef, x.total];
   const csv = [header.join(',')]
-    .concat(rows.map((x) => [x.id, x.date, x.time, x.customer, x.items, x.units, x.productList, x.subtotal, x.discount, x.cost, x.profit, x.margin, x.payment, x.payRef, x.total].map(esc).join(',')))
+    .concat(rows.map((x) => rowToCells(x).map(esc).join(',')))
     .join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));

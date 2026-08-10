@@ -108,8 +108,22 @@
   <div id="screen-dashboard" class="screen active">
     <div id="q-bar" class="queue-bar hidden">⚠️ Offline: <span id="q-bar-n">0</span> pending — will sync when connected</div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
-      <button class="btn btn-ghost btn-sm" onclick="sendSalesReport('whatsapp')">📤 WhatsApp Sales Report</button>
-      <button class="btn btn-ghost btn-sm" onclick="sendSalesReport('email')">✉️ Email Sales Report</button>
+      <button class="btn btn-ghost btn-sm" onclick="openRecipientPicker('whatsapp')">📤 WhatsApp Sales Report</button>
+      <button class="btn btn-ghost btn-sm" onclick="openRecipientPicker('email')">✉️ Email Sales Report</button>
+    </div>
+    <div id="recipient-picker" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeRecipientPicker()">
+      <div class="modal" style="width:380px">
+        <div class="modal-title" id="recipient-picker-title">Send Sales Report</div>
+        <div id="recipient-list" style="margin-bottom:10px"></div>
+        <div style="display:flex;gap:7px;margin-bottom:12px">
+          <input class="form-input" id="new-recipient-input" placeholder="Add number or email...">
+          <button class="btn btn-ghost btn-sm" onclick="addRecipient()">➕ Add</button>
+        </div>
+        <div style="display:flex;gap:7px">
+          <button class="btn btn-primary btn-full" onclick="confirmSendReport()">📤 Send to Selected</button>
+          <button class="btn btn-ghost" onclick="closeRecipientPicker()">Cancel</button>
+        </div>
+      </div>
     </div>
     <div class="kpi-grid">
       <div class="kpi"><div class="kpi-label">Today Sales</div><div class="kpi-value" id="d-sales">LYD 0</div><div class="kpi-sub" id="d-inv">0 invoices</div></div>
@@ -295,7 +309,7 @@
       <div class="card"><div class="card-title">Top Products</div><div id="rpt-prod"></div></div>
     </div>
     <div class="card"><div class="card-title">Transactions</div>
-      <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th data-i18n-th="invoice_col">Invoice</th><th>Date</th><th data-i18n-th="time_col">Time</th><th data-i18n-th="customer_col">Customer</th><th>Items</th><th>Units</th><th>Products</th><th data-i18n-keep="subtotal">Subtotal</th><th>Discount</th><th>Profit</th><th data-i18n-th="payment_col">Payment</th><th data-i18n-th="total_col">Total</th></tr></thead>
+      <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th data-i18n-th="invoice_col">Invoice</th><th>Date</th><th data-i18n-th="time_col">Time</th><th data-i18n-th="customer_col">Customer</th><th>Items</th><th>Units</th><th>Products</th><th data-i18n-keep="subtotal">Subtotal</th><th>Discount</th><th class="profit-col" style="display:none">Profit</th><th data-i18n-th="payment_col">Payment</th><th data-i18n-th="total_col">Total</th></tr></thead>
       <tbody id="rpt-txns"></tbody></table></div>
     </div>
   </div>
@@ -405,6 +419,7 @@
 <div id="toast"></div>
 
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="/js/app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
