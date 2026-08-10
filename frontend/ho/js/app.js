@@ -386,7 +386,39 @@ async function deleteStoreGRN(grnId){
   if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderStGRNTables();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
-function renderStGRNTables(){const p=DATA.storeGRNs.filter(g=>g.Status==='pending'),d=DATA.storeGRNs.filter(g=>g.Status==='received');if($('stgrn-pending'))$('stgrn-pending').innerHTML=p.map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}')" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';if($('stgrn-done'))$('stgrn-done').innerHTML=d.slice(0,15).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';}
+let selectedStGRN=new Set();
+let stgrnPendingGrnIds=[];
+function renderStGRNTables(){
+  const p=DATA.storeGRNs.filter(g=>g.Status==='pending'),d=DATA.storeGRNs.filter(g=>g.Status==='received');
+  stgrnPendingGrnIds=[...new Set(p.map(g=>g.GRNID))];
+  if($('stgrn-pending'))$('stgrn-pending').innerHTML=p.map(g=>{
+    const checked=selectedStGRN.has(g.GRNID)?'checked':'';
+    return `<tr><td><input type="checkbox" ${checked} onchange="toggleStGRNRow('${g.GRNID}')"></td><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}')" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`;
+  }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';
+  const selAll=$('stgrn-select-all');
+  if(selAll)selAll.checked=stgrnPendingGrnIds.length>0&&stgrnPendingGrnIds.every(id=>selectedStGRN.has(id));
+  const info=$('stgrn-selected-info');
+  if(info)info.textContent=selectedStGRN.size?`✅ ${selectedStGRN.size} GRN(s) selected`:`${stgrnPendingGrnIds.length} pending GRN(s)`;
+  if($('stgrn-done'))$('stgrn-done').innerHTML=d.slice(0,15).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';
+}
+function toggleStGRNRow(grnId){if(selectedStGRN.has(grnId))selectedStGRN.delete(grnId);else selectedStGRN.add(grnId);renderStGRNTables();}
+function toggleAllStGRN(cb){
+  if(cb.checked)stgrnPendingGrnIds.forEach(id=>selectedStGRN.add(id));
+  else stgrnPendingGrnIds.forEach(id=>selectedStGRN.delete(id));
+  renderStGRNTables();
+}
+async function deleteSelectedStGRN(){
+  if(!selectedStGRN.size){toast('No GRNs selected','error');return;}
+  if(!confirm(`Delete ${selectedStGRN.size} selected GRN(s)? Stock reserved for each will be reversed. Only works for GRNs not yet received. Cannot be undone.`))return;
+  let ok=0,failed=0;
+  for(const grnId of Array.from(selectedStGRN)){
+    const res=await api('/api/ho/store-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
+    if(res&&res.ok)ok++;else failed++;
+  }
+  selectedStGRN=new Set();
+  toast(`✅ ${ok} deleted`+(failed?`, ${failed} failed`:''),failed?'warn':'ok');
+  await loadAll();renderStGRNTables();
+}
 function downloadStGRNTemplate(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty\n8001000000001,ANTA Running Pro,10\n'],{type:'text/csv'}));a.download='store_grn_template.csv';a.click();}
 async function uploadStGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>{const bc=String(r.Barcode||'').trim();const wh=DATA.warehouse.find(w=>String(w.Barcode)===bc);stgrnLines.push({barcode:bc,name:String(r.Name||wh?.Name||'').trim(),qty:+(r.Qty||1),hoStock:+(wh?.OnHand||0)});});renderStGRNLines();toast('✅ '+rows.length+' lines');}
 function addTrLine(){trLines.push({barcode:'',name:'',qty:1,notes:''});renderTrLines();}
