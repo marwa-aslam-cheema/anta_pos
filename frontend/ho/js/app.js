@@ -245,11 +245,15 @@ async function saveSGRN(){
   }
   if(logRows.length)downloadEventLog(logRows);
 }
-async function deleteSupplierGRN(grnId){
+async function deleteSupplierGRN(grnId,btn){
   if(!confirm(`Delete GRN ${grnId}? This reverses its effect on HO Warehouse stock — the products it added will be subtracted back out.`))return;
-  const res=await api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
-  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();await fetchAndRenderSGRNHist();}
-  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+  const res=await runWithElapsedTimer(btn,'Deleting',()=>api('/api/ho/supplier-grn/'+encodeURIComponent(grnId),{method:'DELETE'}));
+  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — ${res.deleted} line(s), stock reversed`);await loadAll();await fetchAndRenderSGRNHist();}
+  else{
+    const reason=(res&&(res.detail||res.msg))||'Delete failed';
+    toast('❌ '+reason,'error');
+    _csvDownload([{grnId,reason}],[['GRN ID','grnId'],['Reason','reason']],'grn_delete_error_'+today()+'.csv');
+  }
 }
 let sgrnHistPageSize=20,sgrnHistCurrentPage=1,sgrnHistSearchQuery='',sgrnHistPageItems=[],sgrnHistTotalCount=0;
 let selectedGrnLines=new Set();
@@ -380,11 +384,15 @@ async function issueStoreGRN(){
   }
   if(logRows.length)downloadEventLog(logRows);
 }
-async function deleteStoreGRN(grnId){
+async function deleteStoreGRN(grnId,btn){
   if(!confirm(`Delete GRN ${grnId}? This reverses the stock it reserved from HO Warehouse. Only works while it's still pending (not yet received by the store).`))return;
-  const res=await api('/api/ho/store-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
-  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderStGRNTables();}
-  else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
+  const res=await runWithElapsedTimer(btn,'Deleting',()=>api('/api/ho/store-grn/'+encodeURIComponent(grnId),{method:'DELETE'}));
+  if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — ${res.deleted} line(s), stock reversed`);await loadAll();renderStGRNTables();}
+  else{
+    const reason=(res&&(res.detail||res.msg))||'Delete failed';
+    toast('❌ '+reason,'error');
+    _csvDownload([{grnId,reason}],[['GRN ID','grnId'],['Reason','reason']],'grn_delete_error_'+today()+'.csv');
+  }
 }
 let stgrnPendingPageSize=20,stgrnPendingCurrentPage=1,stgrnPendingSearchQuery='',stgrnPendingTotalCount=0,stgrnPendingPageItems=[];
 let stgrnDonePageSize=20,stgrnDoneCurrentPage=1,stgrnDoneSearchQuery='',stgrnDoneTotalCount=0,stgrnDonePageItems=[];
@@ -410,7 +418,7 @@ async function fetchAndRenderStGRNPending(){
 function renderStGRNPendingTable(){
   if($('stgrn-pending'))$('stgrn-pending').innerHTML=stgrnPendingPageItems.map(g=>{
     const checked=selectedStGRN.has(g.GRNID)?'checked':'';
-    return `<tr><td><input type="checkbox" ${checked} onchange="toggleStGRNRow('${g.GRNID}')"></td><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}')" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`;
+    return `<tr><td><input type="checkbox" ${checked} onchange="toggleStGRNRow('${g.GRNID}')"></td><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}',this)" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`;
   }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';
   const selAll=$('stgrn-select-all');
   if(selAll)selAll.checked=stgrnPendingPageItems.length>0&&stgrnPendingPageItems.every(g=>selectedStGRN.has(g.GRNID));
@@ -452,16 +460,32 @@ async function selectAllMatchingStGRN(){
   else toast('❌ Failed to select all — try again','error');
 }
 function clearStGRNSelection(){selectedStGRN=new Set();renderStGRNPendingTable();}
-async function deleteSelectedStGRN(){
+async function deleteSelectedStGRN(btn){
   if(!selectedStGRN.size){toast('No GRNs selected','error');return;}
   if(!confirm(`Delete ${selectedStGRN.size} selected GRN(s)? Stock reserved for each will be reversed. Only works for GRNs not yet received. Cannot be undone.`))return;
+  const ids=Array.from(selectedStGRN);
+  const total=ids.length;
   let ok=0,failed=0;
-  for(const grnId of Array.from(selectedStGRN)){
+  const errorLog=[];
+  const original=btn?btn.innerHTML:'';
+  if(btn)btn.disabled=true;
+  const startTime=Date.now();
+  for(let i=0;i<ids.length;i++){
+    const grnId=ids[i];
+    if(btn){
+      const secs=Math.round((Date.now()-startTime)/1000);
+      const rate=(i>0)?(Date.now()-startTime)/i:0;
+      const remaining=rate>0?Math.round(rate*(total-i)/1000):null;
+      btn.innerHTML=`⏳ Deleting ${i+1}/${total}`+(remaining!=null?` — ~${remaining}s left`:'');
+    }
     const res=await api('/api/ho/store-grn/'+encodeURIComponent(grnId),{method:'DELETE'});
-    if(res&&res.ok)ok++;else failed++;
+    if(res&&res.ok)ok++;
+    else{failed++;errorLog.push({grnId,reason:(res&&(res.detail||res.msg))||'failed'});}
   }
+  if(btn){btn.disabled=false;btn.innerHTML=original;}
   selectedStGRN=new Set();
-  toast(`✅ ${ok} deleted`+(failed?`, ${failed} failed`:''),failed?'warn':'ok');
+  toast(`✅ ${ok} deleted`+(failed?`, ${failed} failed — see downloaded log`:''),failed?'warn':'ok');
+  if(errorLog.length)_csvDownload(errorLog,[['GRN ID','grnId'],['Reason','reason']],'grn_delete_errors_'+today()+'.csv');
   await loadAll();stgrnPendingCurrentPage=1;await fetchAndRenderStGRNPending();
 }
 

@@ -143,6 +143,7 @@ function applyBranding(b) {
   // their own company name/logo in HO Settings.
   const name = (b && b.company_name) || '';
   const logo = (b && b.company_logo) || '';
+  window.__brandName = name; // used by invoice/handover print templates
   const logoBox = document.getElementById('brand-logo');
   const logoText = document.getElementById('brand-text');
   const loginTitle = document.getElementById('login-title-text');
@@ -297,6 +298,7 @@ function renderHandoverCard(h, target) {
        <div style="display:flex;justify-content:space-between;font-size:12px;color:${Math.abs(h.variance) < 0.01 ? 'var(--green)' : (h.variance < 0 ? 'var(--red)' : 'var(--amber)')}"><span>Variance</span><b>${h.variance >= 0 ? '+' : ''}${fmt2(h.variance)}</b></div>
        ${h.varianceNotes ? `<div style="font-size:11px;color:var(--gray4);margin-top:4px">Note: ${h.varianceNotes}</div>` : ''}`
     : '';
+  window.__lastHandover = h;
   target.innerHTML = `
     <div style="border:1.5px solid var(--gray2);border-radius:10px;padding:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -313,7 +315,51 @@ function renderHandoverCard(h, target) {
         <tr><td>Returns (info)</td><td style="text-align:right">${fmt2(h.returnsTotal)}</td></tr>
       </table>
       ${varianceRow}
+      <button class="btn btn-ghost btn-sm btn-full" style="margin-top:10px" onclick="printHandover(window.__lastHandover)">🖨️ Print (with signature)</button>
     </div>`;
+}
+function printHandover(h) {
+  if (!h) { toast('Nothing to print', 'error'); return; }
+  const brand = window.__brandName || 'ANTA Shoes';
+  const bankRows = (h.bankSales || []).map((b) => `<tr><td>${b.bank}</td><td style="text-align:right">${fmt2(b.amount)}</td></tr>`).join('');
+  const printedAt = new Date().toLocaleString();
+  document.getElementById('handover-print-modal').innerHTML = `
+    <div style="max-width:380px;margin:20px auto;font-family:Arial,sans-serif;font-size:13px;color:#111">
+      <div style="text-align:center;margin-bottom:12px">
+        <div style="font-size:20px;font-weight:900">${brand}</div>
+        <div style="font-size:13px;font-weight:700;margin-top:2px">Day-End Cash Handover</div>
+        <div style="font-size:11px;color:#555">${h.storeName} · ${h.date}</div>
+        <div style="font-size:11px;color:#555">Handover ID: ${h.handoverId}</div>
+      </div>
+      <div style="border-top:1px dashed #999;border-bottom:1px dashed #999;padding:8px 0;margin-bottom:10px">
+        <table style="width:100%">
+          <tr><td>Invoices</td><td align="right">${h.invoiceCount}</td></tr>
+          <tr><td>Units sold</td><td align="right">${h.unitsSold}</td></tr>
+          <tr><td>Total Sales</td><td align="right"><b>${fmt2(h.totalSales)}</b></td></tr>
+          <tr><td><b>Cash Sales</b></td><td align="right"><b>${fmt2(h.cashSales)}</b></td></tr>
+          ${bankRows}
+          <tr><td>Returns (info)</td><td align="right">${fmt2(h.returnsTotal)}</td></tr>
+        </table>
+      </div>
+      <div style="font-size:11px;color:#555;margin-bottom:18px">Submitted by ${h.submittedBy} at ${h.submittedAt}</div>
+
+      <div style="margin-top:24px">
+        <div style="margin-bottom:26px">
+          <div style="border-bottom:1px solid #333;height:22px"></div>
+          <div style="font-size:11px;margin-top:3px">Handed Over By (Cashier) — Name &amp; Signature</div>
+        </div>
+        <div style="margin-bottom:26px">
+          <div style="border-bottom:1px solid #333;height:22px"></div>
+          <div style="font-size:11px;margin-top:3px">Received By (Accountant) — Name &amp; Signature</div>
+        </div>
+        <table style="width:100%;font-size:11px;margin-top:6px">
+          <tr><td style="width:50%">Cash Counted: ______________</td><td>Date/Time: ______________</td></tr>
+          <tr><td colspan="2" style="padding-top:14px">Notes / Variance: __________________________________</td></tr>
+        </table>
+      </div>
+      <div style="text-align:center;margin-top:20px;font-size:9px;color:#999">Printed ${printedAt}</div>
+    </div>`;
+  setTimeout(() => window.print(), 50);
 }
 function fmt2(n) { return (Number(n) || 0).toFixed(2); }
 async function loadHandoverHistory() {
@@ -322,13 +368,14 @@ async function loadHandoverHistory() {
   const res = await api('/api/handover/mine');
   if (!res || !res.data) { el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray3);font-size:12px">Failed to load</div>'; return; }
   if (!res.data.length) { el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray3);font-size:12px">No handovers submitted yet</div>'; return; }
-  el.innerHTML = res.data.map((h) => {
+  window.__handoverHistory = res.data;
+  el.innerHTML = res.data.map((h, i) => {
     const badge = h.status === 'received'
       ? `<span style="background:#dcfce7;color:#166534;padding:1px 7px;border-radius:9px;font-size:9px;font-weight:700">RECEIVED</span>`
       : `<span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:9px;font-size:9px;font-weight:700">PENDING</span>`;
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--gray1);font-size:12px">
       <div><b>${h.date}</b> · ${h.handoverId}<br><span style="color:var(--gray4);font-size:10px">Cash ${fmt2(h.cashSales)} · Total ${fmt2(h.totalSales)}</span></div>
-      ${badge}
+      <div style="display:flex;align-items:center;gap:6px">${badge}<button class="btn btn-ghost btn-sm" onclick="printHandover(window.__handoverHistory[${i}])">🖨️</button></div>
     </div>`;
   }).join('');
 }
@@ -997,9 +1044,28 @@ async function completeSale() {
 function showInvoice(txn) {
   window.__lastInvoiceId = (txn && (txn.id || txn.invoice_id)) || window.__lastInvoiceId;
   const items = txn.items || [];
+  const promoNotes = txn.promoNotes || [];
+  const money = (n) => fmt(n);
+  const itemRows = items
+    .map((i) => {
+      const lineTotal = i.lineTotal != null ? i.lineTotal : i.price * i.qty;
+      const promoTag = i.promo ? `<div style="font-size:9px;color:var(--green);font-weight:700">🏷️ ${i.promo}${i.freeQty ? ` — ${i.freeQty} free` : ''}</div>` : '';
+      const lineDiscount = i.discount && i.discount > 0 ? `<div style="font-size:9px;color:var(--gray4)">-${money(i.discount)} off</div>` : '';
+      return `<tr><td>${i.name}${promoTag}${lineDiscount}</td><td align="center">${i.qty}</td><td align="right">${money(lineTotal)}</td></tr>`;
+    })
+    .join('');
+  const discountBlock = txn.discount
+    ? `<div style="display:flex;justify-content:space-between"><span>Item Discounts</span><span>-${money(txn.discount)}</span></div>`
+    : '';
+  const globalDiscountBlock = txn.globalDiscount
+    ? `<div style="display:flex;justify-content:space-between"><span>Invoice Discount</span><span>-${money(txn.globalDiscount)}</span></div>`
+    : '';
+  const promoNotesBlock = promoNotes.length
+    ? `<div style="font-size:10px;color:var(--green);margin-top:3px">🏷️ Promotions applied: ${promoNotes.join(', ')}</div>`
+    : '';
   document.getElementById('inv-content').innerHTML = `
     <div data-invoice-id="${txn.id||''}" style="text-align:center;margin-bottom:12px">
-      <div style="font-size:22px;font-weight:900;color:var(--navy)">ANTA Shoes</div>
+      <div style="font-size:22px;font-weight:900;color:var(--navy)">${(window.__brandName||'ANTA Shoes')}</div>
       <div style="font-size:12px;color:var(--gray4)">${txn.store || DB.settings.storeName}</div>
       <div style="font-size:11px;color:var(--gray4)">${txn.date} ${txn.time || ''} · ${txn.id}</div>
     </div>
@@ -1007,18 +1073,15 @@ function showInvoice(txn) {
     <table style="width:100%;font-size:12px;margin-bottom:10px">
       <thead><tr style="border-bottom:1px solid var(--gray2)"><th align="left">Item</th><th>Qty</th><th align="right">Total</th></tr></thead>
       <tbody>
-        ${items
-          .map(
-            (i) =>
-              `<tr><td>${i.name}</td><td align="center">${i.qty}</td><td align="right">${fmt(i.lineTotal != null ? i.lineTotal : i.price * i.qty)}</td></tr>`
-          )
-          .join('')}
+        ${itemRows}
       </tbody>
     </table>
     <div style="border-top:1px dashed var(--gray2);padding-top:8px;font-size:13px">
-      <div style="display:flex;justify-content:space-between"><span>Subtotal</span><span>${fmt(txn.subtotal)}</span></div>
-      ${txn.discount ? `<div style="display:flex;justify-content:space-between"><span>Discount</span><span>-${fmt(txn.discount)}</span></div>` : ''}
-      <div style="display:flex;justify-content:space-between;font-size:17px;font-weight:900;color:var(--navy);margin-top:5px"><span>TOTAL</span><span>${fmt(txn.total)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span>Subtotal</span><span>${money(txn.subtotal)}</span></div>
+      ${discountBlock}
+      ${globalDiscountBlock}
+      ${promoNotesBlock}
+      <div style="display:flex;justify-content:space-between;font-size:17px;font-weight:900;color:var(--navy);margin-top:5px"><span>TOTAL</span><span>${money(txn.total)}</span></div>
       <div style="margin-top:4px">Payment: <b>${txn.payment}</b>${txn.payRef ? ' · Ref ' + txn.payRef : ''}</div>
     </div>
     <div style="text-align:center;margin-top:13px;padding-top:9px;border-top:1px dashed var(--gray2);font-size:10px;color:var(--gray4)">

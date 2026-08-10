@@ -445,30 +445,37 @@ def delete_supplier_grn(grn_id: str, db: Annotated[Session, Depends(get_db)], us
     editing warehouse numbers in place (where a small bug could silently
     corrupt stock), delete the wrong GRN (which correctly reverses what it
     added) and re-upload the corrected file.
+
+    Processed in memory-bounded chunks — a GRN from a big bulk upload can
+    have thousands of lines, and deleting them all in one transaction is
+    what caused deletes to hang/time out before.
     """
-    grn_rows = db.query(SupplierGRN).filter(SupplierGRN.grn_id == grn_id).all()
-    if not grn_rows:
+    total = db.query(SupplierGRN).filter(SupplierGRN.grn_id == grn_id).count()
+    if total == 0:
         raise HTTPException(status_code=404, detail=f"No GRN found with ID {grn_id}")
 
-    barcodes = list({r.barcode for r in grn_rows})
-    wh_by_barcode = {
-        w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()
-    }
-    for r in grn_rows:
-        wh = wh_by_barcode.get(r.barcode)
-        if wh:
-            wh.supplier_in = max(0, (wh.supplier_in or 0) - int(r.qty or 0))
-            wh.recalc()
-            wh.updated_at = datetime.utcnow()
-
-    for r in grn_rows:
-        db.delete(r)
+    deleted = 0
+    while True:
+        chunk = db.query(SupplierGRN).filter(SupplierGRN.grn_id == grn_id).limit(GRN_CHUNK_SIZE).all()
+        if not chunk:
+            break
+        barcodes = list({r.barcode for r in chunk})
+        wh_by_barcode = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+        for r in chunk:
+            wh = wh_by_barcode.get(r.barcode)
+            if wh:
+                wh.supplier_in = max(0, (wh.supplier_in or 0) - int(r.qty or 0))
+                wh.recalc()
+                wh.updated_at = datetime.utcnow()
+            db.delete(r)
+            deleted += 1
+        db.commit()
+        db.expunge_all()
 
     # Remove the auto-created supplier ledger entry for this GRN, if any.
     db.query(SupplierTxn).filter(SupplierTxn.notes == f"Auto from supplier GRN {grn_id}").delete(synchronize_session=False)
-
     db.commit()
-    return {"ok": True, "status": "ok", "deleted": len(grn_rows), "grnId": grn_id}
+    return {"ok": True, "status": "ok", "deleted": deleted, "grnId": grn_id}
 
 
 @router.delete("/supplier-grn-line/{line_id}")
@@ -630,25 +637,37 @@ def delete_store_grn(grn_id: str, db: Annotated[Session, Depends(get_db)], user:
     status is still 'pending' — once a store has received stock, deleting
     it here would silently disagree with what physically happened, so that
     case is rejected instead.
+
+    Processed in memory-bounded chunks (same pattern as the other bulk GRN
+    operations) — a GRN from a big "send whole catalog to store" upload
+    can have thousands of lines, and deleting them all in one transaction
+    is exactly what hung/timed out before.
     """
-    grn_rows = db.query(StoreGRN).filter(StoreGRN.grn_id == grn_id).all()
-    if not grn_rows:
+    total = db.query(StoreGRN).filter(StoreGRN.grn_id == grn_id).count()
+    if total == 0:
         raise HTTPException(status_code=404, detail=f"No GRN found with ID {grn_id}")
-    if any(r.status != "pending" for r in grn_rows):
+    bad_status = db.query(StoreGRN).filter(StoreGRN.grn_id == grn_id, StoreGRN.status != "pending").first()
+    if bad_status:
         raise HTTPException(status_code=400, detail="This GRN has already been received by the store and can't be deleted — use a Stock Transfer to correct it instead")
 
-    barcodes = list({r.barcode for r in grn_rows})
-    wh_by_barcode = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
-    for r in grn_rows:
-        wh = wh_by_barcode.get(r.barcode)
-        if wh:
-            wh.store_out = max(0, (wh.store_out or 0) - int(r.qty_issued or 0))
-            wh.recalc()
-            wh.updated_at = datetime.utcnow()
-    for r in grn_rows:
-        db.delete(r)
-    db.commit()
-    return {"ok": True, "status": "ok", "deleted": len(grn_rows), "grnId": grn_id}
+    deleted = 0
+    while True:
+        chunk = db.query(StoreGRN).filter(StoreGRN.grn_id == grn_id).limit(GRN_CHUNK_SIZE).all()
+        if not chunk:
+            break
+        barcodes = list({r.barcode for r in chunk})
+        wh_by_barcode = {w.barcode: w for w in db.query(HOWarehouse).filter(HOWarehouse.barcode.in_(barcodes)).all()}
+        for r in chunk:
+            wh = wh_by_barcode.get(r.barcode)
+            if wh:
+                wh.store_out = max(0, (wh.store_out or 0) - int(r.qty_issued or 0))
+                wh.recalc()
+                wh.updated_at = datetime.utcnow()
+            db.delete(r)
+            deleted += 1
+        db.commit()
+        db.expunge_all()
+    return {"ok": True, "status": "ok", "deleted": deleted, "grnId": grn_id}
 
 
 @router.post("/transfer")

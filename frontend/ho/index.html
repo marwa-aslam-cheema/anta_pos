@@ -291,7 +291,7 @@ body{display:flex;height:100vh;overflow:hidden}
             <div class="card-title" style="margin:0">📋 Pending GRNs (not received)</div>
             <div style="display:flex;gap:7px">
               <button class="btn btn-ghost btn-sm" onclick="exportStGRN()">⬇️ Export</button>
-              <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSelectedStGRN()">🗑️ Delete Selected</button>
+              <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSelectedStGRN(this)">🗑️ Delete Selected</button>
             </div>
           </div>
           <p style="font-size:11px;color:var(--gray4);margin:7px 0 9px">Mistake ho jaye aur store ne abhi receive na kiya ho to 🗑 se delete karein (ya checkbox se multiple select karke "Delete Selected") — stock automatically reverse ho jayega.</p>
@@ -970,7 +970,7 @@ body{display:flex;height:100vh;overflow:hidden}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 
 </div>
-<script src="/ho/js/app.js?v=20260810c"></script>
+<script src="/ho/js/app.js?v=20260810d"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
