@@ -98,6 +98,9 @@ def _auto_migrate() -> None:
             "start_time": "VARCHAR(8) DEFAULT ''",
             "end_time": "VARCHAR(8) DEFAULT ''",
         },
+        "store_grn": {
+            "received_by": "VARCHAR(128) DEFAULT ''",
+        },
     }
     inspector = inspect(engine)
     with engine.begin() as conn:

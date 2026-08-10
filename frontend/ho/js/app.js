@@ -90,9 +90,9 @@ if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
 if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho'){invAllCurrentPage=1;fetchAndRenderInvAll();}
 if(name==='stores-admin')renderStoresAdmin();if(name==='users'){renderUsers();populateStoreSelects('u-store');}if(name==='banks')renderBanks();
-if(name==='settings'&&$('api-url'))$('api-url').value=CFG.apiUrl;
+if(name==='settings'){if($('api-url'))$('api-url').value=CFG.apiUrl;loadSettingsForm();}
 if(name==='balance-sheet'){if($('bs-date'))$('bs-date').value=today();loadBalanceSheet();}
-if(name==='cashflow'){cfPreset();loadCashFlow();}if(name==='supplier-accounts'){renderSupplierAccounts();if($('sup-txn-date'))$('sup-txn-date').value=today();}
+if(name==='cashflow'){cfPreset();loadCashFlow();}if(name==='handovers'){populateStoreSelects('handover-store-filter');loadHOHandovers();}if(name==='supplier-accounts'){renderSupplierAccounts();if($('sup-txn-date'))$('sup-txn-date').value=today();}
 if(name==='capital'){if($('cap-date'))$('cap-date').value=today();renderCapital();}
 }
 async function fetchInBatches(fns,batchSize){
@@ -806,6 +806,52 @@ async function deleteAllGrnLines(btn){
   if(res&&res.ok){toast(`✅ Deleted ${res.deleted} line(s)`);selectedGrnLines=new Set();await loadAll();sgrnHistCurrentPage=1;await fetchAndRenderSGRNHist();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
+async function loadHOHandovers(){
+  const storeSel=$('handover-store-filter');
+  const storeId=storeSel&&storeSel.value&&storeSel.value!=='all'?storeSel.value:'';
+  const qs=storeId?('&store_id='+encodeURIComponent(storeId)):'';
+  const [pendingRes,receivedRes]=await Promise.all([
+    api('/api/handover/list?status=pending'+qs),
+    api('/api/handover/list?status=received'+qs),
+  ]);
+  const pendEl=$('handover-pending-list');
+  const pending=(pendingRes&&pendingRes.data)||[];
+  if(pendEl)pendEl.innerHTML=pending.length?pending.map(h=>`
+    <div style="border:1.5px solid var(--amber);border-radius:10px;padding:13px;margin-bottom:10px;background:#fffbeb">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><b style="color:var(--navy)">${h.handoverId}</b> · ${h.storeName} · ${h.date}</div>
+        <span style="font-size:10px;color:var(--gray4)">Submitted by ${h.submittedBy} at ${h.submittedAt}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px;font-size:12px">
+        <div>Invoices<br><b>${h.invoiceCount}</b></div>
+        <div>Units<br><b>${h.unitsSold}</b></div>
+        <div>Total Sales<br><b>${fmt(h.totalSales)}</b></div>
+        <div>Expected Cash<br><b style="color:var(--green)">${fmt(h.cashSales)}</b></div>
+      </div>
+      ${(h.bankSales||[]).length?`<div style="font-size:11px;color:var(--gray4);margin-bottom:8px">Bank/Card: ${h.bankSales.map(b=>b.bank+' '+fmt(b.amount)).join(', ')}</div>`:''}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="form-input" type="number" step="0.01" placeholder="Counted cash amount" id="count-${h.handoverId}" style="width:180px">
+        <input class="form-input" placeholder="Notes (optional)" id="note-${h.handoverId}" style="width:200px">
+        <button class="btn btn-green btn-sm" onclick="receiveHandoverAction('${h.handoverId}')">✅ Receive</button>
+      </div>
+    </div>`).join(''):'<div style="text-align:center;padding:18px;color:var(--gray3);font-size:12px">No pending handovers 🎉</div>';
+
+  const received=(receivedRes&&receivedRes.data)||[];
+  if($('handover-received-table'))$('handover-received-table').innerHTML=received.map(h=>{
+    const v=h.variance||0;
+    const color=Math.abs(v)<0.01?'var(--green)':(v<0?'var(--red)':'var(--amber)');
+    return `<tr><td class="fw7">${h.handoverId}</td><td>${h.date}</td><td>${h.storeName}</td><td>${fmt(h.cashSales)}</td><td>${fmt(h.countedCash)}</td><td style="color:${color};font-weight:700">${v>=0?'+':''}${fmt(v)}</td><td>${h.receivedBy}</td></tr>`;
+  }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--gray3);padding:13px">None yet</td></tr>';
+}
+async function receiveHandoverAction(handoverId){
+  const countedCash=parseFloat(($('count-'+handoverId)&&$('count-'+handoverId).value)||'');
+  if(isNaN(countedCash)){toast('Enter the counted cash amount','error');return;}
+  const notes=($('note-'+handoverId)&&$('note-'+handoverId).value)||'';
+  if(!confirm(`Confirm receiving ${handoverId} with counted cash ${countedCash}?`))return;
+  const res=await api('/api/handover/receive',{method:'POST',body:{handoverId,countedCash,notes}});
+  if(res&&res.ok){toast('✅ Handover received');loadHOHandovers();}
+  else toast('❌ '+((res&&(res.detail||res.msg))||'Failed'),'error');
+}
 async function recalculateStoreInventory(btn){
   const storeId=$('recalc-store')&&$('recalc-store').value;
   if(!storeId){toast('Select a store','error');return;}
@@ -873,6 +919,23 @@ function closeBankForm(){if($('bank-form'))$('bank-form').style.display='none';}
 async function saveBank(){const body={name:$('b-nm').value.trim(),account_no:$('b-acc')?.value||'',device:$('b-dev')?.value||'',active:($('b-act')?.value||'Y')==='Y'};if(!body.name){toast('Name required','error');return;}const res=await api('/api/banks',{method:'POST',body});if(res&&res.bank_id){toast('✅ Bank saved');closeBankForm();await loadAll();renderBanks();}else toast('❌ '+((res&&res.msg)||'Failed'),'error');}
 async function loadBalanceSheet(){const res=await api('/api/ho/balance-sheet');if(!res||!res.ok){toast('BS failed','error');return;}const row=i=>`<tr><td>${i.label}${i.auto?' <span style="font-size:9px;color:var(--accent2)">auto</span>':''}</td><td class="text-right fw7">${fmt(i.value)}</td></tr>`;const set=(id,h)=>{if($(id))$(id).innerHTML=h;};const setT=(id,v)=>{if($(id))$(id).textContent=v;};set('bs-current-assets',(res.currentAssets||[]).map(row).join(''));set('bs-fixed-assets',(res.fixedAssets||[]).length?(res.fixedAssets||[]).map(row).join(''):'<tr><td style="color:var(--gray3);font-size:11px">No fixed assets</td><td></td></tr>');set('bs-liabilities',(res.liabilities||[]).map(row).join(''));set('bs-equity',(res.equity||[]).map(row).join(''));setT('bs-total-assets',fmt(res.totalAssets||0));setT('bs-total-liab',fmt(res.totalLiabilities||0));setT('bs-total-equity',fmt(res.totalEquity||0));setT('bs-total-le',fmt(res.totalLiabEquity||0));}
 async function saveBSEntry(){const type=$('bse-type').value,desc=$('bse-desc').value.trim(),amt=parseFloat($('bse-amt').value)||0,date=$('bse-date')?.value||today();if(!desc||!amt){toast('Fill fields','error');return;}const res=await api('/api/ho/bs-entries',{method:'POST',body:{type,description:desc,amount:amt,date}});if(res&&res.ok){toast('✅ Saved');['bse-desc','bse-amt'].forEach(id=>{if($(id))$(id).value='';});loadBalanceSheet();}else toast('❌ Failed','error');}
+function _csvDownload(rows,header,filename){
+  const esc=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  const csv=[header.map(h=>h[0]).join(',')].concat(rows.map(r=>header.map(h=>esc(r[h[1]])).join(','))).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=filename;a.click();
+}
+function exportSGRN(){
+  _csvDownload(DATA.supplierGRNs||[],[['GRN ID','GRNID'],['Date','Date'],['Supplier','Supplier'],['Invoice','InvoiceNo'],['Barcode','Barcode'],['Product','Name'],['Qty','Qty'],['Cost','UnitCost']],'supplier_grn_'+today()+'.csv');
+}
+function exportStGRN(){
+  _csvDownload(DATA.storeGRNs||[],[['GRN ID','GRNID'],['Date','Date'],['Store','StoreName'],['Barcode','Barcode'],['Product','Name'],['Issued','QtyIssued'],['Received','QtyReceived'],['Status','Status']],'send_to_store_grn_'+today()+'.csv');
+}
+async function exportProducts(){
+  toast('⏳ Preparing export — fetching full product catalog…','info');
+  const all=await api('/api/products?active_only=false');
+  if(!Array.isArray(all)){toast('❌ Export failed','error');return;}
+  _csvDownload(all,[['Barcode','barcode'],['Name','name'],['Brand','brand'],['Category','category'],['Department','department'],['Season','season'],['Gender','gender'],['Size','size'],['Color','color'],['Cost','cost'],['Retail','retail'],['Reorder','reorder'],['Qty','opening']],'products_'+today()+'.csv');
+}
 function saveBSEntries(){}function exportBS(){toast('Use browser print','info');}
 function cfPreset(){const p=($('cf-period')||{}).value||'month',d=today();if(!$('cf-from'))return;if(p==='year'){$('cf-from').value=d.slice(0,4)+'-01-01';$('cf-to').value=d;}else{$('cf-from').value=d.slice(0,7)+'-01';$('cf-to').value=d;}}
 async function loadCashFlow(){const qs=new URLSearchParams();if($('cf-from')?.value)qs.set('from',$('cf-from').value);if($('cf-to')?.value)qs.set('to',$('cf-to').value);qs.set('opening',String(parseFloat($('cf-opening-input')?.value)||0));const res=await api('/api/ho/cashflow?'+qs);if(!res||!res.ok){toast('CF failed','error');return;}const row=i=>`<tr><td>${i.label}</td><td class="text-right fw7" style="color:${i.value>=0?'var(--green)':'var(--red)'}">${fmt(i.value)}</td></tr>`;const set=(id,h)=>{if($(id))$(id).innerHTML=h;};const setT=(id,v,c)=>{if($(id)){$(id).textContent=v;if(c)$(id).style.color=c;}};set('cf-operating',(res.operating||[]).map(row).join(''));setT('cf-op-total',fmt(res.operatingTotal||0),(res.operatingTotal||0)>=0?'var(--green)':'var(--red)');set('cf-investing',(res.investing||[]).length?(res.investing||[]).map(row).join(''):'<tr><td style="color:var(--gray3);font-size:11px">No entries</td><td></td></tr>');setT('cf-inv-total',fmt(res.investingTotal||0));set('cf-financing',(res.financing||[]).length?(res.financing||[]).map(row).join(''):'<tr><td style="color:var(--gray3);font-size:11px">No entries</td><td></td></tr>');setT('cf-fin-total',fmt(res.financingTotal||0));setT('cf-opening',fmt(res.opening||0));setT('cf-net',fmt(res.netCashFlow||0),(res.netCashFlow||0)>=0?'#4caf50':'#f44336');setT('cf-closing',fmt(res.closing||0));if($('cf-status'))$('cf-status').textContent=(res.closing||0)>=0?'✅ Positive':'⚠️ Negative';}
@@ -888,7 +951,72 @@ async function saveCapitalEntry(){const type=$('cap-type').value,date=$('cap-dat
 function renderCapital(){const invested=capitalEntries.filter(c=>c.type==='investment').reduce((a,c)=>a+(+c.amount||0),0);const withdrawn=capitalEntries.filter(c=>c.type==='withdrawal').reduce((a,c)=>a+(+c.amount||0),0);const loans=capitalEntries.filter(c=>c.type==='loan').reduce((a,c)=>a+(+c.amount||0),0);const loanRepaid=capitalEntries.filter(c=>c.type==='loan-repay').reduce((a,c)=>a+(+c.amount||0),0);const netProfit=(DATA.dashboard?.netRevenue||0)-DATA.expenses.reduce((a,e)=>a+(+e.Amount||0),0);const totalEquity=invested-withdrawn+loans-loanRepaid+netProfit;if($('cap-kpis'))$('cap-kpis').innerHTML=[['Total Invested',fmt(invested),'green'],['Total Withdrawn',fmt(withdrawn),''],['Net Loans',fmt(loans-loanRepaid),'amber'],['Net Profit',fmt(netProfit),'blue'],['Total Equity',fmt(totalEquity),'purple']].map(([l,v,c])=>`<div class="kpi ${c}"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');if($('cap-table'))$('cap-table').innerHTML=capitalEntries.map(c=>{const isOut=c.type==='withdrawal'||c.type==='loan-repay';return`<tr><td><span class="badge badge-blue">${c.type}</span></td><td>${c.date}</td><td>${c.desc}</td><td class="text-right fw7" style="color:${isOut?'var(--red)':'var(--green)'}">${isOut?'-':'+'} ${fmt(c.amount)}</td></tr>`;}).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--gray3);padding:16px">No entries</td></tr>';}
 function saveCapital(){}
 async function testConn(){const url=($('api-url')&&$('api-url').value.trim())||CFG.apiUrl;CFG.apiUrl=url.replace(/\/$/,'');localStorage.setItem('anta_ho_api',CFG.apiUrl);const div=$('conn-res');if(div){div.style.display='block';div.innerHTML='⏳ Testing...';}const res=await api('/api/health');if(res&&res.ok){if(div){div.innerHTML='✅ Connected! '+res.app+' v'+res.version;div.style.color='var(--green)';}setSyncStatus('online','Connected');toast('✅ Connected');if($('server-info'))$('server-info').textContent='DB: '+(res.db||'sqlite')+' · modules: '+(res.modules||[]).join(',');}else{if(div){div.innerHTML='❌ Failed';div.style.color='var(--red)';}toast('❌ Failed','error');}}
-function saveSettings(){toast('✅ OK');}
+async function loadSettingsForm(){
+  const res=await api('/api/settings');
+  if(!res||!res.ok)return;
+  _pendingLogoDataUrl=undefined;
+  if($('co-name'))$('co-name').value=res.company_name||'';
+  if($('co-currency'))$('co-currency').value=res.currency||'LYD';
+  const img=$('logo-preview-img'),ph=$('logo-preview-placeholder');
+  if(res.company_logo){
+    if(img){img.src=res.company_logo;img.style.display='block';}
+    if(ph)ph.style.display='none';
+  } else {
+    if(img){img.style.display='none';img.src='';}
+    if(ph)ph.style.display='block';
+  }
+}
+function applyBranding(b){
+  // Blank stays blank on purpose — no "ANTA" is forced on anyone who
+  // hasn't set their own company name/logo in Settings.
+  const name=(b&&b.company_name)||'';
+  const logo=(b&&b.company_logo)||'';
+  const logoBox=$('brand-logo'),logoText=$('brand-text'),loginBox=$('login-logo-box'),loginTitle=$('login-title-text');
+  const initial=name?name.trim().charAt(0).toUpperCase():'';
+  [logoBox,loginBox].forEach(el=>{
+    if(!el)return;
+    if(logo){el.innerHTML=`<img src="${logo}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`;}
+    else{el.innerHTML=initial;}
+  });
+  if(logoText)logoText.textContent=name;
+  if(loginTitle)loginTitle.textContent=name?name+' — Head Office':'Head Office';
+  if(document.title)document.title=name?name+' — Head Office':'Head Office';
+}
+async function loadBranding(){
+  const res=await api('/api/settings/branding');
+  if(res&&res.ok)applyBranding(res);
+}
+let _pendingLogoDataUrl=undefined; // undefined = unchanged, '' = remove, string = new logo
+function onLogoFileSelected(file){
+  if(!file)return;
+  if(file.size>300*1024){toast('❌ Logo too large — keep it under ~200KB','error');return;}
+  const reader=new FileReader();
+  reader.onload=()=>{
+    _pendingLogoDataUrl=reader.result;
+    const img=$('logo-preview-img'),ph=$('logo-preview-placeholder');
+    if(img){img.src=_pendingLogoDataUrl;img.style.display='block';}
+    if(ph)ph.style.display='none';
+  };
+  reader.readAsDataURL(file);
+}
+function removeLogo(){
+  _pendingLogoDataUrl='';
+  const img=$('logo-preview-img'),ph=$('logo-preview-placeholder');
+  if(img){img.style.display='none';img.src='';}
+  if(ph)ph.style.display='block';
+}
+async function saveSettings(){
+  const body={company_name:($('co-name')&&$('co-name').value)||'',currency:($('co-currency')&&$('co-currency').value)||'LYD'};
+  if(_pendingLogoDataUrl!==undefined)body.company_logo=_pendingLogoDataUrl;
+  const res=await api('/api/settings',{method:'PUT',body});
+  if(res&&res.ok){
+    toast('✅ Saved');
+    _pendingLogoDataUrl=undefined;
+    applyBranding(res);
+  } else {
+    toast('❌ '+((res&&(res.detail||res.msg))||'Save failed'),'error');
+  }
+}
 async function exportAll(){
   toast('⏳ Preparing backup — fetching full product catalog…','info');
   const allProducts=await api('/api/products?active_only=false'); // full list, on-demand, export only — never cached in DATA
@@ -904,6 +1032,7 @@ setInterval(updateClock,1000);updateClock();
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&$('login-screen')&&$('login-screen').style.display!=='none')pinSubmit();});
 (async function boot(){
   const saved=localStorage.getItem('anta_ho_api'); if(saved)CFG.apiUrl=saved;
+  try{await loadBranding();}catch(_e){}
   if(CFG.token){
     const me=await api('/api/auth/me');
     const role=me&&me.user&&(me.user.role||'');

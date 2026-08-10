@@ -1,18 +1,18 @@
-// ANTA POS service worker — makes the app itself (HTML/CSS/JS) load with
-// zero internet, so a cashier can open POS and see the offline sales
-// queue / cached catalog even with no connection at all. API calls are
-// intentionally left alone here — offline handling for sales/catalog data
-// lives in app.js (see the offline sales queue), since caching POST
-// requests isn't meaningful and live data should always win when it's
-// reachable.
-const CACHE_NAME = 'anta-pos-shell-v1';
+// ANTA HO service worker — caches the HO panel's app shell (HTML/CSS/JS)
+// so it still loads with zero internet. Unlike POS, HO does NOT queue
+// offline writes (GRN, sales data, financial entries) — those all touch
+// shared company-wide data and queuing them offline risks conflicting
+// updates from multiple admins. This only makes the app itself openable
+// offline; every actual save still requires a live connection, same as
+// before.
+const CACHE_NAME = 'anta-ho-shell-v1';
 const APP_SHELL = [
-  '/pos/',
-  '/css/styles.css',
-  '/js/app.js',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
+  '/ho/',
+  '/ho/css/styles.css',
+  '/ho/js/app.js',
+  '/ho/manifest.json',
+  '/ho/icon-192.png',
+  '/ho/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -34,11 +34,10 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API calls: always go straight to the network. Never intercepted here.
+  // API calls always go straight to the network — never cached/queued
+  // here. HO writes need to be live.
   if (url.pathname.startsWith('/api/')) return;
 
-  // Loading the POS page itself: try network first (latest version when
-  // online), fall back to the cached shell when offline.
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
@@ -47,13 +46,11 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return res;
         })
-        .catch(() => caches.match('/pos/'))
+        .catch(() => caches.match('/ho/'))
     );
     return;
   }
 
-  // Static assets (css/js/icons): serve from cache instantly, refresh the
-  // cache in the background when online.
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const networkFetch = fetch(event.request)

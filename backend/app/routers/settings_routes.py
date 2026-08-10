@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 class SettingsUpdate(BaseModel):
     company_name: Optional[str] = None
+    company_logo: Optional[str] = None  # base64 data URL, or "" to remove
     pos_name: Optional[str] = None
     store_name: Optional[str] = None  # updates current user's store name (admin)
     store_id: Optional[str] = None
@@ -36,6 +37,21 @@ def _put(db: Session, key: str, value: str) -> None:
         db.add(Setting(key=key, value=value))
 
 
+@router.get("/branding")
+def get_branding(db: Annotated[Session, Depends(get_db)]):
+    """Public, no-auth branding info — company name/logo only, nothing
+    sensitive. Needed so the LOGIN screen (before anyone is authenticated)
+    can also show custom branding, not just the app after login. Blank by
+    default — no hardcoded company name is forced on anyone.
+    """
+    m = _get_map(db)
+    return {
+        "ok": True,
+        "company_name": m.get("company_name", ""),
+        "company_logo": m.get("company_logo", ""),
+    }
+
+
 @router.get("")
 def get_settings(
     db: Annotated[Session, Depends(get_db)],
@@ -45,8 +61,9 @@ def get_settings(
     store = db.query(Store).filter(Store.store_id == user.store_id).first()
     return {
         "ok": True,
-        "company_name": m.get("company_name", "ANTA Shoes"),
-        "pos_name": m.get("pos_name", "ANTA POS"),
+        "company_name": m.get("company_name", ""),
+        "company_logo": m.get("company_logo", ""),
+        "pos_name": m.get("pos_name", ""),
         "policy": m.get("policy", ""),
         "currency": m.get("currency", "LYD"),
         "language": m.get("language", "en"),
@@ -63,6 +80,8 @@ def update_settings(
 ):
     if body.company_name is not None:
         _put(db, "company_name", body.company_name)
+    if body.company_logo is not None:
+        _put(db, "company_logo", body.company_logo)
     if body.pos_name is not None:
         _put(db, "pos_name", body.pos_name)
     if body.policy is not None:

@@ -563,3 +563,4 @@ def save_store(
         phone=row.phone or "",
         active=row.active,
     )
+ 

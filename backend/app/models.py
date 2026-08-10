@@ -270,6 +270,32 @@ class StoreGRN(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    received_by: Mapped[str] = mapped_column(String(128), default="")
+
+
+class CashHandover(Base):
+    __tablename__ = "cash_handovers"
+    __table_args__ = (Index("ix_cash_handover_status", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    handover_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    date: Mapped[str] = mapped_column(String(16), index=True)  # business day, YYYY-MM-DD
+    store_id: Mapped[str] = mapped_column(String(32), index=True)
+    store_name: Mapped[str] = mapped_column(String(128), default="")
+    invoice_count: Mapped[int] = mapped_column(Integer, default=0)
+    units_sold: Mapped[int] = mapped_column(Integer, default=0)
+    total_sales: Mapped[float] = mapped_column(Float, default=0.0)
+    cash_sales: Mapped[float] = mapped_column(Float, default=0.0)
+    bank_sales_json: Mapped[str] = mapped_column(Text, default="[]")  # [{bank, amount}]
+    returns_total: Mapped[float] = mapped_column(Float, default=0.0)
+    submitted_by: Mapped[str] = mapped_column(String(128), default="")
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|received
+    counted_cash: Mapped[float | None] = mapped_column(Float, nullable=True)
+    variance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    variance_notes: Mapped[str] = mapped_column(Text, default="")
+    received_by: Mapped[str] = mapped_column(String(128), default="")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Transfer(Base):

@@ -137,6 +137,28 @@ async function api(path, opts = {}) {
 }
 
 /* ---------- LOGIN ---------- */
+/* ---------- BRANDING (company name/logo, set in HO Settings) ---------- */
+function applyBranding(b) {
+  // Blank stays blank — no "ANTA" is forced on anyone who hasn't set
+  // their own company name/logo in HO Settings.
+  const name = (b && b.company_name) || '';
+  const logo = (b && b.company_logo) || '';
+  const logoBox = document.getElementById('brand-logo');
+  const logoText = document.getElementById('brand-text');
+  const loginTitle = document.getElementById('login-title-text');
+  const initial = name ? name.trim().charAt(0).toUpperCase() : '';
+  if (logoBox) {
+    logoBox.innerHTML = logo ? `<img src="${logo}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : initial;
+  }
+  if (logoText) logoText.textContent = name;
+  if (loginTitle) loginTitle.textContent = name ? name + ' POS' : 'POS';
+  if (document.title) document.title = name ? name + ' — POS' : 'POS';
+}
+async function loadBranding() {
+  const res = await api('/api/settings/branding');
+  if (res && res.ok) applyBranding(res);
+}
+
 async function initLogin() {
   const sel = document.getElementById('login-store');
   const cached = localStorage.getItem('anta_stores_v4');
@@ -243,6 +265,65 @@ function logout() {
 }
 
 /* ---------- NAV ---------- */
+/* ---------- DAY-END CASH HANDOVER ---------- */
+async function generateHandover() {
+  const box = document.getElementById('handover-preview');
+  box.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray4);font-size:12px">⏳ Calculating today\'s totals…</div>';
+  const res = await api('/api/handover/submit', { method: 'POST', body: {} });
+  if (!res || !res.ok) {
+    box.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#b91c1c;font-size:12px">❌ ${(res && (res.detail || res.msg)) || 'Failed to generate handover'}</div>`;
+    return;
+  }
+  renderHandoverCard(res.handover, box);
+  toast('✅ Handover ' + res.handover.handoverId + ' submitted');
+  loadHandoverHistory();
+}
+function renderHandoverCard(h, target) {
+  const bankRows = (h.bankSales || []).map((b) => `<tr><td>${b.bank}</td><td style="text-align:right">${fmt2(b.amount)}</td></tr>`).join('');
+  const statusBadge = h.status === 'received'
+    ? `<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">✅ RECEIVED by ${h.receivedBy} · ${h.receivedAt}</span>`
+    : `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">⏳ PENDING — waiting for accountant</span>`;
+  const varianceRow = h.status === 'received'
+    ? `<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px"><span>Counted cash</span><b>${fmt2(h.countedCash)}</b></div>
+       <div style="display:flex;justify-content:space-between;font-size:12px;color:${Math.abs(h.variance) < 0.01 ? 'var(--green)' : (h.variance < 0 ? 'var(--red)' : 'var(--amber)')}"><span>Variance</span><b>${h.variance >= 0 ? '+' : ''}${fmt2(h.variance)}</b></div>
+       ${h.varianceNotes ? `<div style="font-size:11px;color:var(--gray4);margin-top:4px">Note: ${h.varianceNotes}</div>` : ''}`
+    : '';
+  target.innerHTML = `
+    <div style="border:1.5px solid var(--gray2);border-radius:10px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:800;color:var(--navy)">${h.handoverId}</div>
+        ${statusBadge}
+      </div>
+      <div style="font-size:11px;color:var(--gray4);margin-bottom:10px">${h.date} · ${h.storeName} · submitted by ${h.submittedBy} at ${h.submittedAt}</div>
+      <table style="width:100%;font-size:12px">
+        <tr><td>Invoices</td><td style="text-align:right">${h.invoiceCount}</td></tr>
+        <tr><td>Units sold</td><td style="text-align:right">${h.unitsSold}</td></tr>
+        <tr><td>Total sales</td><td style="text-align:right;font-weight:700">${fmt2(h.totalSales)}</td></tr>
+        <tr><td style="font-weight:700">💵 Cash sales</td><td style="text-align:right;font-weight:700;color:var(--green)">${fmt2(h.cashSales)}</td></tr>
+        ${bankRows}
+        <tr><td>Returns (info)</td><td style="text-align:right">${fmt2(h.returnsTotal)}</td></tr>
+      </table>
+      ${varianceRow}
+    </div>`;
+}
+function fmt2(n) { return (Number(n) || 0).toFixed(2); }
+async function loadHandoverHistory() {
+  const el = document.getElementById('handover-history');
+  el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray4);font-size:12px">⏳ Loading…</div>';
+  const res = await api('/api/handover/mine');
+  if (!res || !res.data) { el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray3);font-size:12px">Failed to load</div>'; return; }
+  if (!res.data.length) { el.innerHTML = '<div style="text-align:center;padding:14px;color:var(--gray3);font-size:12px">No handovers submitted yet</div>'; return; }
+  el.innerHTML = res.data.map((h) => {
+    const badge = h.status === 'received'
+      ? `<span style="background:#dcfce7;color:#166534;padding:1px 7px;border-radius:9px;font-size:9px;font-weight:700">RECEIVED</span>`
+      : `<span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:9px;font-size:9px;font-weight:700">PENDING</span>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--gray1);font-size:12px">
+      <div><b>${h.date}</b> · ${h.handoverId}<br><span style="color:var(--gray4);font-size:10px">Cash ${fmt2(h.cashSales)} · Total ${fmt2(h.totalSales)}</span></div>
+      ${badge}
+    </div>`;
+  }).join('');
+}
+
 function show(name) {
   if(window.__screenTitles && window.__screenTitles[name]){ /* i18n titles */ }
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
@@ -252,7 +333,7 @@ function show(name) {
   document.querySelectorAll('.nav-item').forEach((n) => {
     if (n.getAttribute('onclick') && n.getAttribute('onclick').includes("'" + name + "'")) n.classList.add('active');
   });
-  const titles = Object.assign({dashboard:'Dashboard',sale:'New Sale',returns:'Returns',exchange:'Exchange',claims:'Claims',grn:'Receive Stock (GRN)',inventory:'Inventory',reports:'Reports',settings:'Settings'}, window.__screenTitles||{});
+  const titles = Object.assign({dashboard:'Dashboard',sale:'New Sale',returns:'Returns',exchange:'Exchange',claims:'Claims',grn:'Receive Stock (GRN)',inventory:'Inventory',reports:'Reports',handover:'Day End / Cash Handover',settings:'Settings'}, window.__screenTitles||{});
   document.getElementById('screen-title').textContent = titles[name] || name;
   if (name === 'dashboard') renderDash();
   if (name === 'sale') {
@@ -264,8 +345,9 @@ function show(name) {
     rptPreset();
     loadReports();
   }
-  if (name === 'grn') loadGRNs();
+  if (name === 'grn') { grnActiveTab = 'pending'; switchGRNTab('pending'); }
   if (name === 'returns') renderRetList();
+  if (name === 'handover') loadHandoverHistory();
   if (name === 'settings') {
     document.getElementById('api-url').value = CFG.apiUrl;
     document.getElementById('s-name').value = DB.settings.storeName || '';
@@ -337,6 +419,7 @@ async function reloadCatalog() {
   if (settings && settings.ok) {
     DB.settings.policy = settings.policy || DB.settings.policy;
     DB.settings.currency = settings.currency || 'LYD';
+    applyBranding(settings);
   }
   if (Array.isArray(prods) && DB.products.length) saveCatalogCache();
   // recent data
@@ -368,6 +451,41 @@ async function loadLocalReturns() {
 }
 
 /* ---------- DASHBOARD ---------- */
+async function sendSalesReport(via) {
+  // Free, zero-setup approach: build the message text, then hand off to
+  // WhatsApp Web/App (wa.me link) or the device's own email app (mailto)
+  // with everything pre-filled — one more tap to actually send. No API
+  // keys or business accounts needed on either side.
+  toast('⏳ Preparing report…', 'info');
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const res = await api('/api/reports?from=' + todayStr + '&to=' + todayStr);
+  const rev = (res && res.revenue) || 0;
+  const inv = (res && res.invoices) || 0;
+  const units = (res && res.units) || 0;
+  const pay = (res && res.paymentBreakdown) || {};
+  const payLines = Object.entries(pay).map(([k, v]) => `  ${k}: ${fmt2(v)}`).join('\n') || '  —';
+  const storeName = DB.settings.storeName || 'Store';
+  const now = new Date();
+  const text =
+    `📊 Sales Report — ${storeName}\n` +
+    `${now.toLocaleDateString()} ${now.toLocaleTimeString()}\n\n` +
+    `Invoices: ${inv}\n` +
+    `Units sold: ${units}\n` +
+    `Total Revenue: ${fmt2(rev)}\n\n` +
+    `Payment breakdown:\n${payLines}`;
+
+  if (via === 'whatsapp') {
+    const number = localStorage.getItem('anta_manager_whatsapp') || prompt('Manager\'s WhatsApp number (with country code, e.g. 218912345678):', '');
+    if (!number) return;
+    localStorage.setItem('anta_manager_whatsapp', number);
+    window.open('https://wa.me/' + number.replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(text), '_blank');
+  } else {
+    const email = localStorage.getItem('anta_manager_email') || prompt('Manager\'s email address:', '');
+    if (!email) return;
+    localStorage.setItem('anta_manager_email', email);
+    window.location.href = 'mailto:' + email + '?subject=' + encodeURIComponent('Sales Report — ' + storeName + ' — ' + now.toLocaleDateString()) + '&body=' + encodeURIComponent(text);
+  }
+}
 async function renderDash() {
   const res = await api('/api/dashboard');
   if (!res || !res.ok) {
@@ -615,7 +733,12 @@ function updatePendingSyncBadge() {
   const n = getPendingSales().length;
   const el = document.getElementById('pending-sync-badge');
   if (!el) return;
-  if (n > 0) {
+  // Cashiers don't need to see sync internals — it just adds worry over
+  // something they can't act on anyway. Managers/admins can see it since
+  // they're the ones who'd care if HO connectivity is flaky.
+  const role = (USER && USER.role) || 'cashier';
+  const visibleToRole = role === 'admin' || role === 'manager';
+  if (n > 0 && visibleToRole) {
     el.style.display = 'block';
     el.textContent = `⏳ ${n} sale(s) waiting to sync`;
   } else {
@@ -736,7 +859,13 @@ async function completeSale() {
     const localId = 'LOCAL-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     txn = { ...payload, id: localId, synced: false };
     queuePendingSale(localId, payload);
-    toast('📴 Offline — sale saved locally, will sync automatically when online', 'warn');
+    // Cashiers just need to know the sale went through — sync internals
+    // aren't their concern and just add worry over something they can't
+    // act on. Managers/admins see the fuller picture.
+    const role = (USER && USER.role) || 'cashier';
+    if (role === 'admin' || role === 'manager') {
+      toast('📴 Offline — sale saved locally, will sync automatically when online', 'warn');
+    }
   }
   // local stock adjust
   (payload.items || []).forEach((i) => adjustLocalStock(i.barcode, -i.qty));
@@ -750,7 +879,11 @@ async function completeSale() {
   renderCart();
   renderQuick();
   addLog('sale', (txn.synced === false ? '📴 offline ' : '✅ ') + txn.id);
-  setOnline('online', txn.synced === false ? 'Sale saved offline' : 'Sale saved');
+  {
+    const role = (USER && USER.role) || 'cashier';
+    const showOfflineDetail = txn.synced === false && (role === 'admin' || role === 'manager');
+    setOnline('online', showOfflineDetail ? 'Sale saved offline' : 'Sale saved');
+  }
   toast(t('sale_complete') + ' ' + txn.id);
 }
 function showInvoice(txn) {
@@ -928,6 +1061,56 @@ async function doClaim() {
 }
 
 /* ---------- GRN ---------- */
+let grnActiveTab = 'pending';
+function switchGRNTab(tab) {
+  grnActiveTab = tab;
+  const pendBtn = document.getElementById('grn-tab-pending');
+  const histBtn = document.getElementById('grn-tab-history');
+  if (pendBtn) pendBtn.className = tab === 'pending' ? 'btn btn-sm' : 'btn btn-ghost btn-sm';
+  if (histBtn) histBtn.className = tab === 'history' ? 'btn btn-sm' : 'btn btn-ghost btn-sm';
+  if (tab === 'pending') loadGRNs();
+  else loadGRNHistory();
+}
+async function loadGRNHistory() {
+  const gl = document.getElementById('grn-list');
+  gl.innerHTML = '<div style="text-align:center;padding:22px;color:var(--gray4);font-size:12px">⏳ Loading receive history...</div>';
+  const res = await api('/api/grns?status=received');
+  if (!res || !res.data) {
+    gl.innerHTML = '<div style="text-align:center;padding:22px;color:var(--gray3);font-size:12px">⚠️ Cannot load history.<br><button class="btn btn-ghost btn-sm mt" onclick="loadGRNHistory()">🔄 Retry</button></div>';
+    return;
+  }
+  const grouped = {};
+  res.data.forEach((line) => {
+    if (!grouped[line.GRNID]) grouped[line.GRNID] = { grnId: line.GRNID, date: line.Date, receivedBy: line.ReceivedBy, receivedAt: line.ReceivedAt, lines: [] };
+    grouped[line.GRNID].lines.push(line);
+  });
+  const grns = Object.values(grouped).sort((a, b) => (b.receivedAt || '').localeCompare(a.receivedAt || ''));
+  if (!grns.length) {
+    gl.innerHTML = '<div style="text-align:center;padding:22px;color:var(--gray3);font-size:12px">No GRNs received yet</div>';
+    return;
+  }
+  gl.innerHTML = grns
+    .map(
+      (g) => `
+    <div class="grn-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div><div style="font-weight:800;color:var(--navy)">${g.grnId}</div><div style="font-size:11px;color:var(--gray4)">Issued: ${g.date} · ${g.lines.length} item(s)</div></div>
+        <div style="text-align:right;font-size:11px;color:var(--gray4)">
+          <div>✅ Received: <b>${g.receivedAt || '—'}</b></div>
+          <div>By: <b>${g.receivedBy || '—'}</b></div>
+        </div>
+      </div>
+      <table><thead><tr><th>Barcode</th><th>Product</th><th>Issued</th><th>Received</th></tr></thead>
+      <tbody>${g.lines
+        .map(
+          (l) =>
+            `<tr><td style="font-family:monospace;font-size:10px">${l.Barcode}</td><td>${l.Name}</td><td style="text-align:center">${l.QtyIssued}</td><td style="text-align:center;font-weight:700;color:var(--green)">${l.QtyReceived}</td></tr>`
+        )
+        .join('')}</tbody></table>
+    </div>`
+    )
+    .join('');
+}
 async function loadGRNs() {
   const gl = document.getElementById('grn-list');
   gl.innerHTML = '<div style="text-align:center;padding:22px;color:var(--gray4);font-size:12px">⏳ Loading pending GRNs...</div>';
@@ -1639,6 +1822,7 @@ async function loadAppSettings(){
     const savedUrl = localStorage.getItem('anta_api_url');
     if (savedUrl) CFG.apiUrl = savedUrl;
     try { applyLang(); } catch (e) {}
+    try { await loadBranding(); } catch (e) {}
     await initLogin();
   } catch (e) {
     console.error('boot failed', e);

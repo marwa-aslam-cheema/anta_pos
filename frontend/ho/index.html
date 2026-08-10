@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ANTA Shoes — Head Office v4</title>
+<link rel="manifest" href="/ho/manifest.json">
+<meta name="theme-color" content="#1e3a5f">
+<link rel="icon" href="/ho/icon-192.png">
+<link rel="apple-touch-icon" href="/ho/icon-192.png">
 <link rel="stylesheet" href="/ho/css/styles.css">
 <style>
 body{display:flex;height:100vh;overflow:hidden}
@@ -22,8 +26,8 @@ body{display:flex;height:100vh;overflow:hidden}
 
 <div id="login-screen" style="position:fixed;inset:0;background:linear-gradient(135deg,var(--navy),var(--blue));display:flex;align-items:center;justify-content:center;z-index:9999">
   <div style="background:#fff;border-radius:16px;padding:36px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.4);text-align:center">
-    <div style="width:72px;height:72px;background:var(--accent);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:28px;margin:0 auto 16px">A</div>
-    <div style="font-size:20px;font-weight:800;color:var(--navy);margin-bottom:4px">ANTA Head Office</div>
+    <div id="login-logo-box" style="width:72px;height:72px;background:var(--accent);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:28px;margin:0 auto 16px">A</div>
+    <div id="login-title-text" style="font-size:20px;font-weight:800;color:var(--navy);margin-bottom:4px">Head Office</div>
     <div style="font-size:12px;color:var(--gray4);margin-bottom:20px">Admin / Manager / Accountant PIN login</div>
     <select id="login-store" class="form-input" style="margin-bottom:12px;width:100%"><option value="HO">Head Office</option></select>
     <div id="pin-display" style="font-size:28px;font-weight:800;letter-spacing:8px;color:var(--navy);background:var(--gray0);border-radius:10px;padding:12px;margin-bottom:12px">----</div>
@@ -51,8 +55,8 @@ body{display:flex;height:100vh;overflow:hidden}
 
 <div id="sidebar">
   <div class="brand">
-    <div class="brand-logo">A</div>
-    <div><div class="brand-text">ANTA Shoes</div><div class="brand-sub">Head Office</div><div class="ho-tag">HO ADMIN</div></div>
+    <div class="brand-logo" id="brand-logo">A</div>
+    <div><div class="brand-text" id="brand-text">Head Office</div><div class="brand-sub">Head Office</div><div class="ho-tag">HO ADMIN</div></div>
   </div>
   <div class="sync-bar"><div class="dot offline" id="sync-dot"></div><div><div id="sync-lbl" style="font-size:10px">Offline</div><div id="sync-last" style="font-size:9px;opacity:.6">—</div></div></div>
   <nav>
@@ -71,6 +75,7 @@ body{display:flex;height:100vh;overflow:hidden}
     <div class="nav-item" onclick="show('balance-sheet')"><span class="ico">⚖️</span>Balance Sheet</div>
     <div class="nav-item" onclick="show('cashflow')"><span class="ico">💰</span>Cash Flow</div>
     <div class="nav-item" onclick="show('supplier-accounts')"><span class="ico">🤝</span>Supplier Accounts</div>
+    <div class="nav-item" onclick="show('handovers')"><span class="ico">💵</span>Cash Handovers</div>
     <div class="nav-item" onclick="show('expenses-ho')" data-role="admin,accountant"><span class="ico">💸</span>Expenses</div>
     <div class="nav-item" onclick="show('accounts')" data-role="admin,accountant"><span class="ico">📒</span>Chart of Accounts</div>
     <div class="nav-item" onclick="show('promotions')" data-role="admin"><span class="ico">🏷️</span>Promotions</div>
@@ -208,6 +213,7 @@ body{display:flex;height:100vh;overflow:hidden}
       </div>
       <div class="card">
         <div class="card-title">📋 Supplier GRN History</div>
+        <button class="btn btn-ghost btn-sm" onclick="exportSGRN()">⬇️ Export</button>
         <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">🗑 se ek line delete karein (jaise koi galat "Grand Total" row) — sirf wahi line reverse hogi, baaki data safe rahega. Bulk delete ke liye neeche checkboxes ya "Select All Matching" use karein.</p>
         <div style="margin-bottom:9px"><input class="form-input" id="sgrn-hist-search" placeholder="🔍 Search by barcode, name, or GRN ID…" oninput="searchSGRNHist(this.value)"></div>
         <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap">
@@ -278,6 +284,7 @@ body{display:flex;height:100vh;overflow:hidden}
       <div>
         <div class="card">
           <div class="card-title">📋 Pending GRNs (not received)</div>
+          <button class="btn btn-ghost btn-sm" onclick="exportStGRN()">⬇️ Export</button>
           <p style="font-size:11px;color:var(--gray4);margin-bottom:9px">Mistake ho jaye aur store ne abhi receive na kiya ho to 🗑 se delete karein — stock automatically reverse ho jayega.</p>
           <table><thead><tr><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Issued</th><th>Received</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="stgrn-pending"></tbody></table>
@@ -339,6 +346,7 @@ body{display:flex;height:100vh;overflow:hidden}
         <div class="card-title" style="margin:0">👟 Product Master</div>
         <div style="display:flex;gap:7px">
           <button class="btn btn-ghost btn-sm" onclick="downloadProdTemplate()">⬇️ Template</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportProducts()">⬇️ Export</button>
           <div class="upload-zone" style="padding:7px 11px;border-style:solid;cursor:pointer" onclick="document.getElementById('prod-file').click()">📤 Upload Excel</div>
           <input type="file" id="prod-file" style="display:none" accept=".xlsx,.csv" onchange="uploadProducts(this.files[0])">
           <button class="btn btn-primary btn-sm" onclick="showAddProd()">➕ Add Product</button>
@@ -606,9 +614,25 @@ body{display:flex;height:100vh;overflow:hidden}
         <div id="conn-res" style="margin-top:9px;font-size:12px;display:none"></div>
       </div>
       <div class="card">
-        <div class="card-title">⚙️ Company Settings</div>
-        <div class="form-group"><label class="form-label">Company Name</label><input class="form-input" id="co-name" value="ANTA Shoes Libya"></div>
+        <div class="card-title">🎨 Branding — Company Name &amp; Logo</div>
+        <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">Yahan jo bhi set karein, wo POS aur HO — dono jagah sidebar/login screen pe turant reflect ho jayega. Khaali chor dein to blank rahega — koi default "ANTA" branding zabardasti nahi dikhegi.</p>
+        <div class="form-group"><label class="form-label">Company Name</label><input class="form-input" id="co-name" placeholder="e.g. My Shoe Store"></div>
         <div class="form-group"><label class="form-label">Currency</label><input class="form-input" id="co-currency" value="LYD"></div>
+        <div class="form-group">
+          <label class="form-label">Company Logo</label>
+          <div style="display:flex;align-items:center;gap:12px">
+            <div id="logo-preview-box" style="width:56px;height:56px;border-radius:10px;border:1.5px dashed var(--gray2);display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--gray0)">
+              <span id="logo-preview-placeholder" style="font-size:10px;color:var(--gray3)">No logo</span>
+              <img id="logo-preview-img" style="display:none;width:100%;height:100%;object-fit:cover">
+            </div>
+            <div>
+              <input type="file" id="logo-file" accept="image/*" style="display:none" onchange="onLogoFileSelected(this.files[0])">
+              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('logo-file').click()">📤 Upload Logo</button>
+              <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="removeLogo()">🗑️ Remove</button>
+              <div style="font-size:10px;color:var(--gray4);margin-top:4px">PNG/JPG, under 200KB recommended</div>
+            </div>
+          </div>
+        </div>
         <button class="btn btn-primary" onclick="saveSettings()">💾 Save</button>
       </div>
     </div>
@@ -749,6 +773,26 @@ body{display:flex;height:100vh;overflow:hidden}
         <label class="form-label" style="color:rgba(255,255,255,.6)">Opening Cash Balance (LYD)</label>
         <input class="form-input" id="cf-opening-input" type="number" placeholder="0.00" style="width:200px" oninput="calcCF()">
       </div>
+    </div>
+  </div>
+
+  <!-- CASH HANDOVERS -->
+  <div id="screen-handovers" class="screen">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
+        <div class="card-title" style="margin:0">💵 Cash Handovers — Pending Review</div>
+        <div style="display:flex;gap:7px">
+          <select class="form-input" style="width:150px;padding:5px 9px" id="handover-store-filter"><option value="">All Stores</option></select>
+          <button class="btn btn-ghost btn-sm" onclick="loadHOHandovers()">🔄 Refresh</button>
+        </div>
+      </div>
+      <p style="font-size:11px;color:var(--gray4);margin-bottom:11px">Har store apne din ke end pe cash handover submit karta hai. Yahan physical cash count kar ke "Receive" karein — system automatically variance (farq) calculate kar dega.</p>
+      <div id="handover-pending-list"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">✅ Received Handovers</div>
+      <table><thead><tr><th>Handover ID</th><th>Date</th><th>Store</th><th>Expected Cash</th><th>Counted</th><th>Variance</th><th>Received By</th></tr></thead>
+      <tbody id="handover-received-table"></tbody></table>
     </div>
   </div>
 
@@ -908,5 +952,12 @@ body{display:flex;height:100vh;overflow:hidden}
 
 </div>
 <script src="/ho/js/app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/ho/sw.js').catch(() => {});
+  });
+}
+</script>
 </body>
 </html>

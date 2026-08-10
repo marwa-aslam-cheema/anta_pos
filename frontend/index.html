@@ -32,7 +32,7 @@
 <div id="login-screen">
   <div class="login-box">
     <div class="login-logo">A</div>
-    <div class="login-title" data-i18n="login_title">ANTA Shoes POS v4</div>
+    <div class="login-title" id="login-title-text" data-i18n="login_title">POS</div>
     <div class="login-sub" data-i18n="login_sub">Select store and enter PIN</div>
     <div style="margin-top:12px;font-size:12px"><a href="/" style="color:var(--accent2)">← Portal</a> · <a href="/ho/" style="color:var(--accent2)">Head Office</a></div>
     <select class="store-select-login" id="login-store"></select>
@@ -60,8 +60,8 @@
 <div id="app" style="display:none">
 <div id="sidebar">
   <div class="brand">
-    <div class="brand-logo">A</div>
-    <div><div class="brand-text">ANTA Shoes</div><div class="brand-sub" id="sb-store">POS</div></div>
+    <div class="brand-logo" id="brand-logo">A</div>
+    <div><div class="brand-text" id="brand-text">POS</div><div class="brand-sub" id="sb-store">POS</div></div>
   </div>
   <div class="sync-bar">
     <div class="dot offline" id="sync-dot"></div>
@@ -84,6 +84,7 @@
     <div class="nav-item" onclick="show('inventory')" data-screen="inventory"><span class="ico">📦</span><span class="nav-label" data-i18n="inventory">Inventory</span> <span class="nav-badge" id="low-badge">0</span></div>
     <div class="nav-sec">Reports</div>
     <div class="nav-item" onclick="show('reports')" data-screen="reports"><span class="ico">📈</span><span class="nav-label" data-i18n="reports">Reports</span></div>
+    <div class="nav-item" onclick="show('handover')" data-screen="handover"><span class="ico">💵</span><span class="nav-label">Day End / Cash Handover</span></div>
     <div class="nav-sec">Settings</div>
     <div class="nav-item" onclick="show('settings')" data-screen="settings"><span class="ico">⚙️</span><span class="nav-label" data-i18n="settings">Settings</span></div>
   </nav>
@@ -106,6 +107,10 @@
   <!-- DASHBOARD -->
   <div id="screen-dashboard" class="screen active">
     <div id="q-bar" class="queue-bar hidden">⚠️ Offline: <span id="q-bar-n">0</span> pending — will sync when connected</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+      <button class="btn btn-ghost btn-sm" onclick="sendSalesReport('whatsapp')">📤 WhatsApp Sales Report</button>
+      <button class="btn btn-ghost btn-sm" onclick="sendSalesReport('email')">✉️ Email Sales Report</button>
+    </div>
     <div class="kpi-grid">
       <div class="kpi"><div class="kpi-label">Today Sales</div><div class="kpi-value" id="d-sales">LYD 0</div><div class="kpi-sub" id="d-inv">0 invoices</div></div>
       <div class="kpi blue"><div class="kpi-label">Net Revenue</div><div class="kpi-value" id="d-net">LYD 0</div><div class="kpi-sub">after returns</div></div>
@@ -241,9 +246,13 @@
   <div id="screen-grn" class="screen">
     <div style="max-width:800px">
       <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
           <div class="card-title" style="margin:0">📥 Receive Stock from HO</div>
-          <button class="btn btn-blue btn-sm" onclick="loadGRNs()">🔄 Refresh</button>
+          <button class="btn btn-blue btn-sm" onclick="grnActiveTab==='pending'?loadGRNs():loadGRNHistory()">🔄 Refresh</button>
+        </div>
+        <div style="display:flex;gap:7px;margin-bottom:13px">
+          <button class="btn btn-sm" id="grn-tab-pending" onclick="switchGRNTab('pending')">📥 Pending</button>
+          <button class="btn btn-ghost btn-sm" id="grn-tab-history" onclick="switchGRNTab('history')">📋 Receive History</button>
         </div>
         <div id="grn-list"><div style="text-align:center;padding:24px;color:var(--gray3);font-size:12px">Loading from HO...</div></div>
       </div>
@@ -288,6 +297,25 @@
     <div class="card"><div class="card-title">Transactions</div>
       <div class="table-wrapper" style="overflow-x:auto"><table><thead><tr><th data-i18n-th="invoice_col">Invoice</th><th>Date</th><th data-i18n-th="time_col">Time</th><th data-i18n-th="customer_col">Customer</th><th>Items</th><th>Units</th><th>Products</th><th data-i18n-keep="subtotal">Subtotal</th><th>Discount</th><th>Profit</th><th data-i18n-th="payment_col">Payment</th><th data-i18n-th="total_col">Total</th></tr></thead>
       <tbody id="rpt-txns"></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- DAY END / CASH HANDOVER -->
+  <div id="screen-handover" class="screen">
+    <div style="max-width:640px">
+      <div class="card">
+        <div class="card-title">💵 Day-End Cash Handover</div>
+        <p style="font-size:11px;color:var(--gray4);margin-bottom:13px">Aaj ki sales se ek handover form banega — cash aur bank sales ka total. Submit karne ke baad accountant physical cash count karke ise "Received" mark karega.</p>
+        <button class="btn btn-primary btn-full" onclick="generateHandover()">📋 Generate Today's Handover Form</button>
+        <div id="handover-preview" style="margin-top:14px"></div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px">
+          <div class="card-title" style="margin:0">📋 Handover History (this store)</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadHandoverHistory()">🔄 Refresh</button>
+        </div>
+        <div id="handover-history"><div style="text-align:center;padding:18px;color:var(--gray3);font-size:12px">Loading…</div></div>
+      </div>
     </div>
   </div>
 

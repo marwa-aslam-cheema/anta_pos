@@ -102,6 +102,8 @@ def list_store_grns(
             "QtyReceived": r.qty_received,
             "Status": r.status,
             "Notes": r.notes or "",
+            "ReceivedBy": r.received_by or "",
+            "ReceivedAt": r.received_at.strftime("%Y-%m-%d %H:%M") if r.received_at else "",
         }
         for r in rows
     ]
@@ -139,6 +141,7 @@ def receive_grn(
     row.qty_received = qty
     row.status = "received"
     row.received_at = datetime.utcnow()
+    row.received_by = user.name or user.user_id
     store_name = body.storeName or row.store_name or user.store_name
     store_id = body.storeId or row.store_id or user.store_id
     update_inv(db, body.barcode, store_name, store_id, row.name or "", "grn", qty)

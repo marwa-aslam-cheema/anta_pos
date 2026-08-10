@@ -20,6 +20,7 @@ from .routers import promotions as promotions_routes
 from .routers import license_routes
 from .routers import settings_routes
 from .routers import receipts as receipts_routes
+from .routers import handover_routes
 
 settings = get_settings()
 APP_DIR = Path(__file__).resolve().parent
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(license_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(receipts_routes.router)
+    app.include_router(handover_routes.router)
 
     @app.on_event("startup")
     def _startup():
