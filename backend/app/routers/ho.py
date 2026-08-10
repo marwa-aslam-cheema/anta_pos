@@ -206,17 +206,52 @@ def count_supplier_grns(
 
 
 @router.get("/store-grns")
-def list_all_store_grns(db: Annotated[Session, Depends(get_db)], user: Annotated[CurrentUser, Depends(_admin)], status: Optional[str] = None, limit: int = 300):
-    q = db.query(StoreGRN)
+def list_all_store_grns(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 300,
+    offset: int = 0,
+):
+    """Send-to-Store GRN line history, searchable + paginated (same pattern
+    as Product Master / Supplier GRN History) — a big consolidated upload
+    can put thousands of lines under one status, so this needs to page
+    through them server-side rather than dumping everything at once.
+    """
+    query = db.query(StoreGRN)
     if status:
-        q = q.filter(StoreGRN.status == status)
-    rows = q.order_by(StoreGRN.id.desc()).limit(limit).all()
+        query = query.filter(StoreGRN.status == status)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            (StoreGRN.barcode.ilike(like)) | (StoreGRN.name.ilike(like)) | (StoreGRN.grn_id.ilike(like)) | (StoreGRN.store_name.ilike(like))
+        )
+    rows = query.order_by(StoreGRN.id.desc()).offset(offset).limit(limit).all()
     data = [{
-        "GRNID": r.grn_id, "Date": r.date, "StoreID": r.store_id, "StoreName": r.store_name,
+        "id": r.id, "GRNID": r.grn_id, "Date": r.date, "StoreID": r.store_id, "StoreName": r.store_name,
         "Barcode": r.barcode, "Name": r.name, "QtyIssued": r.qty_issued, "QtyReceived": r.qty_received,
         "Status": r.status, "Notes": r.notes or "",
     } for r in rows]
     return {"ok": True, "status": "ok", "data": data}
+
+
+@router.get("/store-grns/count")
+def count_store_grns(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[CurrentUser, Depends(_admin)],
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+):
+    query = db.query(StoreGRN)
+    if status:
+        query = query.filter(StoreGRN.status == status)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            (StoreGRN.barcode.ilike(like)) | (StoreGRN.name.ilike(like)) | (StoreGRN.grn_id.ilike(like)) | (StoreGRN.store_name.ilike(like))
+        )
+    return {"ok": True, "count": query.count()}
 
 
 @router.get("/transfers")

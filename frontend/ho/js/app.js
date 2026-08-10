@@ -85,7 +85,7 @@ async function pinSubmit(){
 function show(name){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));const s=$('screen-'+name);if(s)s.classList.add('active');document.querySelectorAll('.nav-item').forEach(n=>{if(n.getAttribute('onclick')&&n.getAttribute('onclick').includes("'"+name+"'"))n.classList.add('active');});const titles={dashboard:'HO Dashboard','stores-view':'All Stores',warehouse:'HO Warehouse','supplier-grn':'Supplier GRN','store-grn':'Send Stock to Stores',transfer:'Stock Transfer',products:'Product Master',pl:'P&L Summary','expenses-ho':'Expenses',reports:'Sales Reports','inventory-ho':'Inventory — All Stores','stores-admin':'Manage Stores',users:'Users & PINs',banks:'Banks & Payments',settings:'Settings','balance-sheet':'Balance Sheet',cashflow:'Cash Flow','supplier-accounts':'Supplier Accounts',capital:'Capital & Equity'};if($('screen-title'))$('screen-title').textContent=titles[name]||name;
 if(name==='dashboard')renderDash();if(name==='stores-view')renderStoresView();if(name==='warehouse')renderWarehouse();
 if(name==='supplier-grn'){sgrnHistCurrentPage=1;fetchAndRenderSGRNHist();if($('sgrn-date'))$('sgrn-date').value=today();if($('sgrn-id'))$('sgrn-id').value='SGRN-'+Date.now().toString().slice(-6);}
-if(name==='store-grn'){renderStGRNTables();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
+if(name==='store-grn'){stgrnPendingCurrentPage=1;stgrnDoneCurrentPage=1;fetchAndRenderStGRNPending();fetchAndRenderStGRNDone();populateStoreSelects();if($('stgrn-date'))$('stgrn-date').value=today();if($('stgrn-id'))$('stgrn-id').value='GRN-'+Date.now().toString().slice(-6);}
 if(name==='transfer'){renderTrHist();populateStoreSelects();}if(name==='products'){prodCurrentPage=1;fetchAndRenderProductsPage();}
 if(name==='pl'){plPreset();populateStoreSelects('pl-store');loadPL();}if(name==='expenses-ho'){populateStoreSelects('exp-store-filter');populateStoreSelects('ho-exp-store');if($('ho-exp-date'))$('ho-exp-date').value=today();loadExpenses();}if(name==='promotions')loadPromosHO();if(name==='accounts'){loadCOA();loadJournals();}if(name==='license')loadLicense();
 if(name==='reports'){rptPreset();populateStoreSelects('rpt-store');}if(name==='inventory-ho'){invAllCurrentPage=1;fetchAndRenderInvAll();}
@@ -386,27 +386,72 @@ async function deleteStoreGRN(grnId){
   if(res&&res.ok){toast(`✅ GRN ${grnId} deleted — stock reversed`);await loadAll();renderStGRNTables();}
   else toast('❌ '+((res&&(res.detail||res.msg))||'Delete failed'),'error');
 }
+let stgrnPendingPageSize=20,stgrnPendingCurrentPage=1,stgrnPendingSearchQuery='',stgrnPendingTotalCount=0,stgrnPendingPageItems=[];
+let stgrnDonePageSize=20,stgrnDoneCurrentPage=1,stgrnDoneSearchQuery='',stgrnDoneTotalCount=0,stgrnDonePageItems=[];
 let selectedStGRN=new Set();
-let stgrnPendingGrnIds=[];
-function renderStGRNTables(){
-  const p=DATA.storeGRNs.filter(g=>g.Status==='pending'),d=DATA.storeGRNs.filter(g=>g.Status==='received');
-  stgrnPendingGrnIds=[...new Set(p.map(g=>g.GRNID))];
-  if($('stgrn-pending'))$('stgrn-pending').innerHTML=p.map(g=>{
+
+async function fetchAndRenderStGRNPending(){
+  const offset=(stgrnPendingCurrentPage-1)*stgrnPendingPageSize;
+  const qs=new URLSearchParams({status:'pending',limit:String(stgrnPendingPageSize),offset:String(offset)});
+  if(stgrnPendingSearchQuery)qs.set('q',stgrnPendingSearchQuery);
+  const countQs=new URLSearchParams({status:'pending'});if(stgrnPendingSearchQuery)countQs.set('q',stgrnPendingSearchQuery);
+  if($('stgrn-pending'))$('stgrn-pending').innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">⏳ Loading…</td></tr>';
+  try{
+    const [rowsRes,countRes]=await Promise.all([
+      api('/api/ho/store-grns?'+qs.toString()),
+      api('/api/ho/store-grns/count?'+countQs.toString()),
+    ]);
+    stgrnPendingPageItems=(rowsRes&&rowsRes.data)?rowsRes.data:[];
+    stgrnPendingTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:stgrnPendingPageItems.length;
+  }catch(_e){stgrnPendingPageItems=[];stgrnPendingTotalCount=0;toast('❌ Failed to load pending GRNs','error');}
+  renderStGRNPendingTable();
+  renderStGRNPendingPagination();
+}
+function renderStGRNPendingTable(){
+  if($('stgrn-pending'))$('stgrn-pending').innerHTML=stgrnPendingPageItems.map(g=>{
     const checked=selectedStGRN.has(g.GRNID)?'checked':'';
     return `<tr><td><input type="checkbox" ${checked} onchange="toggleStGRNRow('${g.GRNID}')"></td><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyIssued}</td><td>—</td><td><span class="badge badge-amber">Pending</span></td><td><button class="btn btn-ghost btn-sm" onclick="deleteStoreGRN('${g.GRNID}')" title="Delete — mistake ho jaye to yahan se undo karein">🗑</button></td></tr>`;
   }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--gray3);padding:13px">No pending</td></tr>';
   const selAll=$('stgrn-select-all');
-  if(selAll)selAll.checked=stgrnPendingGrnIds.length>0&&stgrnPendingGrnIds.every(id=>selectedStGRN.has(id));
+  if(selAll)selAll.checked=stgrnPendingPageItems.length>0&&stgrnPendingPageItems.every(g=>selectedStGRN.has(g.GRNID));
   const info=$('stgrn-selected-info');
-  if(info)info.textContent=selectedStGRN.size?`✅ ${selectedStGRN.size} GRN(s) selected`:`${stgrnPendingGrnIds.length} pending GRN(s)`;
-  if($('stgrn-done'))$('stgrn-done').innerHTML=d.slice(0,15).map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';
+  if(info)info.textContent=selectedStGRN.size?`✅ ${selectedStGRN.size} GRN(s) selected`:`${stgrnPendingTotalCount} pending GRN line(s) total`;
 }
-function toggleStGRNRow(grnId){if(selectedStGRN.has(grnId))selectedStGRN.delete(grnId);else selectedStGRN.add(grnId);renderStGRNTables();}
+function renderStGRNPendingPagination(){
+  const container=$('stgrn-pending-pagination');
+  if(!container)return;
+  const totalPages=Math.max(1,Math.ceil(stgrnPendingTotalCount/stgrnPendingPageSize));
+  stgrnPendingCurrentPage=Math.max(1,Math.min(stgrnPendingCurrentPage,totalPages));
+  let html='<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">';
+  if(stgrnPendingCurrentPage>1)html+=`<button class="btn btn-ghost btn-sm" onclick="stgrnPendingCurrentPage--;fetchAndRenderStGRNPending()">← Previous</button>`;
+  html+=`<span style="font-size:11px;color:var(--gray4)">Page ${stgrnPendingCurrentPage} of ${totalPages} · ${stgrnPendingTotalCount} line(s)${stgrnPendingSearchQuery?` match "${stgrnPendingSearchQuery}"`:''}</span>`;
+  if(stgrnPendingCurrentPage<totalPages)html+=`<button class="btn btn-ghost btn-sm" onclick="stgrnPendingCurrentPage++;fetchAndRenderStGRNPending()">Next →</button>`;
+  html+='</div>';
+  container.innerHTML=html;
+}
+let _stgrnPendingSearchDebounce=null;
+function searchStGRNPending(query){
+  clearTimeout(_stgrnPendingSearchDebounce);
+  _stgrnPendingSearchDebounce=setTimeout(()=>{stgrnPendingSearchQuery=String(query||'').trim();stgrnPendingCurrentPage=1;fetchAndRenderStGRNPending();},180);
+}
+function toggleStGRNRow(grnId){if(selectedStGRN.has(grnId))selectedStGRN.delete(grnId);else selectedStGRN.add(grnId);renderStGRNPendingTable();}
 function toggleAllStGRN(cb){
-  if(cb.checked)stgrnPendingGrnIds.forEach(id=>selectedStGRN.add(id));
-  else stgrnPendingGrnIds.forEach(id=>selectedStGRN.delete(id));
-  renderStGRNTables();
+  const idsOnPage=[...new Set(stgrnPendingPageItems.map(g=>g.GRNID))];
+  if(cb.checked)idsOnPage.forEach(id=>selectedStGRN.add(id));
+  else idsOnPage.forEach(id=>selectedStGRN.delete(id));
+  renderStGRNPendingTable();
 }
+async function selectAllMatchingStGRN(){
+  if(!stgrnPendingTotalCount){toast('Nothing to select','warn');return;}
+  if(stgrnPendingTotalCount>3000&&!confirm(`Select all ${stgrnPendingTotalCount} matching line(s)? This fetches the full matching list once.`))return;
+  toast('⏳ Selecting all matching…','info');
+  const qs=new URLSearchParams({status:'pending',limit:String(stgrnPendingTotalCount)});
+  if(stgrnPendingSearchQuery)qs.set('q',stgrnPendingSearchQuery);
+  const res=await api('/api/ho/store-grns?'+qs.toString());
+  if(res&&res.data){res.data.forEach(g=>selectedStGRN.add(g.GRNID));renderStGRNPendingTable();toast(`✅ ${selectedStGRN.size} GRN(s) selected`);}
+  else toast('❌ Failed to select all — try again','error');
+}
+function clearStGRNSelection(){selectedStGRN=new Set();renderStGRNPendingTable();}
 async function deleteSelectedStGRN(){
   if(!selectedStGRN.size){toast('No GRNs selected','error');return;}
   if(!confirm(`Delete ${selectedStGRN.size} selected GRN(s)? Stock reserved for each will be reversed. Only works for GRNs not yet received. Cannot be undone.`))return;
@@ -417,7 +462,48 @@ async function deleteSelectedStGRN(){
   }
   selectedStGRN=new Set();
   toast(`✅ ${ok} deleted`+(failed?`, ${failed} failed`:''),failed?'warn':'ok');
-  await loadAll();renderStGRNTables();
+  await loadAll();stgrnPendingCurrentPage=1;await fetchAndRenderStGRNPending();
+}
+
+async function fetchAndRenderStGRNDone(){
+  const offset=(stgrnDoneCurrentPage-1)*stgrnDonePageSize;
+  const qs=new URLSearchParams({status:'received',limit:String(stgrnDonePageSize),offset:String(offset)});
+  if(stgrnDoneSearchQuery)qs.set('q',stgrnDoneSearchQuery);
+  const countQs=new URLSearchParams({status:'received'});if(stgrnDoneSearchQuery)countQs.set('q',stgrnDoneSearchQuery);
+  if($('stgrn-done'))$('stgrn-done').innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">⏳ Loading…</td></tr>';
+  try{
+    const [rowsRes,countRes]=await Promise.all([
+      api('/api/ho/store-grns?'+qs.toString()),
+      api('/api/ho/store-grns/count?'+countQs.toString()),
+    ]);
+    stgrnDonePageItems=(rowsRes&&rowsRes.data)?rowsRes.data:[];
+    stgrnDoneTotalCount=(countRes&&typeof countRes.count==='number')?countRes.count:stgrnDonePageItems.length;
+  }catch(_e){stgrnDonePageItems=[];stgrnDoneTotalCount=0;}
+  if($('stgrn-done'))$('stgrn-done').innerHTML=stgrnDonePageItems.map(g=>`<tr><td class="fw7">${g.GRNID}</td><td>${g.Date}</td><td>${g.StoreName}</td><td>${(g.Name||'').slice(0,25)}</td><td>${g.QtyReceived}</td><td><span class="badge badge-green">Received</span></td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--gray3);padding:13px">None</td></tr>';
+  renderStGRNDonePagination();
+}
+function renderStGRNDonePagination(){
+  const container=$('stgrn-done-pagination');
+  if(!container)return;
+  const totalPages=Math.max(1,Math.ceil(stgrnDoneTotalCount/stgrnDonePageSize));
+  stgrnDoneCurrentPage=Math.max(1,Math.min(stgrnDoneCurrentPage,totalPages));
+  let html='<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">';
+  if(stgrnDoneCurrentPage>1)html+=`<button class="btn btn-ghost btn-sm" onclick="stgrnDoneCurrentPage--;fetchAndRenderStGRNDone()">← Previous</button>`;
+  html+=`<span style="font-size:11px;color:var(--gray4)">Page ${stgrnDoneCurrentPage} of ${totalPages} · ${stgrnDoneTotalCount} line(s)${stgrnDoneSearchQuery?` match "${stgrnDoneSearchQuery}"`:''}</span>`;
+  if(stgrnDoneCurrentPage<totalPages)html+=`<button class="btn btn-ghost btn-sm" onclick="stgrnDoneCurrentPage++;fetchAndRenderStGRNDone()">Next →</button>`;
+  html+='</div>';
+  container.innerHTML=html;
+}
+let _stgrnDoneSearchDebounce=null;
+function searchStGRNDone(query){
+  clearTimeout(_stgrnDoneSearchDebounce);
+  _stgrnDoneSearchDebounce=setTimeout(()=>{stgrnDoneSearchQuery=String(query||'').trim();stgrnDoneCurrentPage=1;fetchAndRenderStGRNDone();},180);
+}
+function renderStGRNTables(){
+  // Back-compat shim for any leftover caller (e.g. after save/delete
+  // actions elsewhere) — refreshes both paginated lists from page 1.
+  stgrnPendingCurrentPage=1;stgrnDoneCurrentPage=1;
+  fetchAndRenderStGRNPending();fetchAndRenderStGRNDone();
 }
 function downloadStGRNTemplate(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['Barcode,Name,Qty\n8001000000001,ANTA Running Pro,10\n'],{type:'text/csv'}));a.download='store_grn_template.csv';a.click();}
 async function uploadStGRN(file){if(!file)return;const rows=await readExcel(file);rows.forEach(r=>{const bc=String(r.Barcode||'').trim();const wh=DATA.warehouse.find(w=>String(w.Barcode)===bc);stgrnLines.push({barcode:bc,name:String(r.Name||wh?.Name||'').trim(),qty:+(r.Qty||1),hoStock:+(wh?.OnHand||0)});});renderStGRNLines();toast('✅ '+rows.length+' lines');}

@@ -295,14 +295,22 @@ body{display:flex;height:100vh;overflow:hidden}
             </div>
           </div>
           <p style="font-size:11px;color:var(--gray4);margin:7px 0 9px">Mistake ho jaye aur store ne abhi receive na kiya ho to 🗑 se delete karein (ya checkbox se multiple select karke "Delete Selected") — stock automatically reverse ho jayega.</p>
+          <div style="margin-bottom:8px"><input class="form-input" id="stgrn-pending-search" placeholder="🔍 Search by barcode, product, GRN ID, or store…" oninput="searchStGRNPending(this.value)"></div>
+          <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="selectAllMatchingStGRN()">☑️ Select All Matching (all pages)</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearStGRNSelection()">✕ Clear Selection</button>
+          </div>
           <div id="stgrn-selected-info" style="font-size:11px;color:var(--gray4);margin-bottom:8px"></div>
-          <table><thead><tr><th><input type="checkbox" id="stgrn-select-all" onchange="toggleAllStGRN(this)" title="Select/deselect all shown"></th><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Issued</th><th>Received</th><th>Status</th><th>Actions</th></tr></thead>
+          <table><thead><tr><th><input type="checkbox" id="stgrn-select-all" onchange="toggleAllStGRN(this)" title="Select/deselect this page only"></th><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Issued</th><th>Received</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="stgrn-pending"></tbody></table>
+          <div id="stgrn-pending-pagination"></div>
         </div>
         <div class="card">
           <div class="card-title">✅ Completed GRNs</div>
+          <div style="margin-bottom:8px"><input class="form-input" id="stgrn-done-search" placeholder="🔍 Search by barcode, product, GRN ID, or store…" oninput="searchStGRNDone(this.value)"></div>
           <table><thead><tr><th>GRN ID</th><th>Date</th><th>Store</th><th>Product</th><th>Qty</th><th>Status</th></tr></thead>
           <tbody id="stgrn-done"></tbody></table>
+          <div id="stgrn-done-pagination"></div>
         </div>
       </div>
     </div>
